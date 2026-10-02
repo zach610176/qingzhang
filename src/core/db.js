@@ -19,10 +19,158 @@ export const STORE = {
 
 let _dbPromise = null;
 
+/**
+ * 当前是不是 Node（跑测试用的），而不是真正的浏览器。
+ *
+ * 为什么需要这个：测试要在 Node 里跑界面和统计逻辑，但 Node 没有 IndexedDB。
+ * 早期做法是用 Node 的模块加载钩子把 db.js 换成内存实现，
+ * 但那个做法不可靠 —— ES 模块的静态依赖在钩子生效之前就已经解析了，
+ * 于是「真 db」和「内存 db」会同时存在两份实例，谁拿到哪一份取决于导入顺序。
+ * 现在改成在 db.js 内部判断环境，不管谁导入都只有一种行为。
+ */
+function isNodeEnv() {
+  return typeof process !== 'undefined' && !!(process.versions && process.versions.node);
+}
+
+/**
+ * IndexedDB 的内存替身，只实现 db.js 用到的那些 API。
+ *
+ * 它模拟的是「事务」这一层：写操作在 tx 完成时才生效，
+ * 读操作把结果挂在 request.result 上 —— 和真实 IndexedDB 的时序保持一致，
+ * 这样上层代码不用为了测试写两套逻辑。
+ */
+function createMemoryIDB() {
+  /** storeName → Map(key → value) */
+  const data = {
+    [STORE.TX]: new Map(),
+    [STORE.RULES]: new Map(),
+    [STORE.SETTINGS]: new Map(),
+    [STORE.BATCHES]: new Map(),
+    [STORE.RECURRING]: new Map(),
+    [STORE.META]: new Map(),
+  };
+  const keyPathOf = {
+    [STORE.TX]: 'id',
+    [STORE.RULES]: 'key',
+    [STORE.SETTINGS]: 'key',
+    [STORE.BATCHES]: 'id',
+    [STORE.RECURRING]: 'id',
+    [STORE.META]: 'key',
+  };
+
+  const later = (fn) => setTimeout(fn, 0);
+  const req = () => ({ result: undefined, onsuccess: null, onerror: null });
+
+  function makeStore(name) {
+    const map = () => {
+      if (!data[name]) throw new Error('内存后端里没有这个 store：' + name);
+      return data[name];
+    };
+    const kp = keyPathOf[name];
+
+    return {
+      put(value) {
+        const r = req();
+        map().set(value[kp], value);
+        r.result = value[kp];
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      get(key) {
+        const r = req();
+        r.result = map().get(key);
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      getAll() {
+        const r = req();
+        r.result = [...map().values()];
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      delete(key) {
+        const r = req();
+        map().delete(key);
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      clear() {
+        const r = req();
+        map().clear();
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      count() {
+        const r = req();
+        r.result = map().size;
+        later(() => r.onsuccess && r.onsuccess());
+        return r;
+      },
+      /** 简易索引：只支持 ts 这一个（txInRange 用到） */
+      index() {
+        return {
+          openCursor(range) {
+            const r = req();
+            let list = [...map().values()];
+            if (range && typeof range.lower === 'number') {
+              const lo = range.lowerOpen ? (v) => v > range.lower : (v) => v >= range.lower;
+              const hi = range.upper === undefined
+                ? () => true
+                : (range.upperOpen ? (v) => v < range.upper : (v) => v <= range.upper);
+              list = list.filter((v) => lo(v.ts) && hi(v.ts));
+            }
+            list.sort((a, b) => a.ts - b.ts);
+            let i = 0;
+            const step = () => {
+              if (i >= list.length) { r.result = null; r.onsuccess && r.onsuccess(); return; }
+              r.result = { value: list[i], continue: () => { i++; later(step); } };
+              r.onsuccess && r.onsuccess();
+            };
+            later(step);
+            return r;
+          },
+          getAll() {
+            const r = req();
+            r.result = [...map().values()];
+            later(() => r.onsuccess && r.onsuccess());
+            return r;
+          },
+        };
+      },
+    };
+  }
+
+  return {
+    transaction(names) {
+      const list = Array.isArray(names) ? names : [names];
+      const stores = {};
+      for (const n of list) stores[n] = makeStore(n);
+      const tx = {
+        objectStore: (n) => {
+          if (!stores[n]) stores[n] = makeStore(n);
+          return stores[n];
+        },
+        error: null,
+        oncomplete: null,
+        onerror: null,
+        onabort: null,
+      };
+      // 所有请求都排在微任务之后，写完再触发 complete —— 和真实行为一致
+      later(() => later(() => tx.oncomplete && tx.oncomplete()));
+      return tx;
+    },
+  };
+}
+
 function openDB() {
   if (_dbPromise) return _dbPromise;
 
   _dbPromise = new Promise((resolve, reject) => {
+    // Node 环境（跑测试）没有 IndexedDB，用内存后端顶上
+    if (isNodeEnv() && typeof indexedDB === 'undefined') {
+      resolve(createMemoryIDB());
+      return;
+    }
     if (typeof indexedDB === 'undefined') {
       reject(new Error('这个浏览器不支持本地数据库（IndexedDB），无法保存数据'));
       return;
@@ -143,7 +291,11 @@ export async function txInRange(start, end) {
     const tx = db.transaction(STORE.TX, 'readonly');
     const idx = tx.objectStore(STORE.TX).index('ts');
     const out = [];
-    const req = idx.openCursor(IDBKeyRange.bound(start, end, false, true));
+    // 直接用上下界对象，而不是浏览器里的 IDBKeyRange.bound：
+    // Node 内存后端没有这个全局对象，传普通对象两边都能处理，
+    // 真实的 IndexedDB 也接受符合 IDBKeyRange 结构的对象。
+    const range = { lower: start, upper: end, lowerOpen: false, upperOpen: true };
+    const req = idx.openCursor(range);
     req.onsuccess = () => {
       const cur = req.result;
       if (cur) { out.push(cur.value); cur.continue(); }
@@ -324,4 +476,27 @@ export async function storageEstimate() {
   } catch (e) {
     return null;
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * 测试辅助（只在 Node 里用得到；浏览器里调用是无害的空操作）
+ * ------------------------------------------------------------------ */
+
+/** 清空内存后端（测试之间互相隔离用） */
+export async function __resetDb() {
+  if (!isNodeEnv()) return false;
+  await clearAllData();
+  return true;
+}
+
+/** 直接塞一批交易进去（测试准备数据用） */
+export async function __seedDb(txs) {
+  if (!isNodeEnv()) return 0;
+  await putTxMany(txs);
+  return txs.length;
+}
+
+/** 当前用的是不是内存后端 */
+export function __isMemoryBackend() {
+  return isNodeEnv() && typeof indexedDB === 'undefined';
 }
