@@ -86,7 +86,13 @@ export function renderSettings(root) {
     <div class="card" style="margin:0 16px 16px">
       <div class="row">
         <span class="row-main"><span class="row-title">轻账</span>
-        <span class="row-sub">版本 1.0 · 本地记账</span></span>
+        <span class="row-sub">本地记账 · 数据只在这台手机上</span></span>
+        <span class="row-value muted" id="set-version">${esc(st.appVersion || '读取中…')}</span>
+      </div>
+      <div class="row tappable" data-act="check-update">
+        <span class="row-main"><span class="row-title">检查更新</span>
+        <span class="row-sub">看看有没有新版本；有新版本会自动刷新</span></span>
+        <span class="row-chev"><svg viewBox="0 0 8 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 1.5L6.5 6.5l-5 5"/></svg></span>
       </div>
       <div class="row">
         <span class="row-main"><span class="row-title">数据存放位置</span>
@@ -99,7 +105,7 @@ export function renderSettings(root) {
     </div>
 
     <div class="px16 tiny muted center" style="padding-bottom:20px">
-      轻账 v1.0 · 为 iPhone 打造 · 人民币计价
+      轻账 ${esc(st.appVersion || '')} · 为 iPhone 打造 · 人民币计价
     </div>
   `;
 
