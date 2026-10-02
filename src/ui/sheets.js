@@ -80,6 +80,9 @@ export function openQuickEntry(opts = {}) {
         </div>
 
         <div class="cat-pick" id="qe-cats"></div>
+        <button type="button" class="cat-manage" id="qe-manage">
+          <span>＋</span> 新建 / 管理分类
+        </button>
 
         <div class="card" style="margin:0 16px 10px">
           <div class="field inline">
@@ -156,6 +159,9 @@ export function openQuickEntry(opts = {}) {
       }
 
       function renderCats() {
+        // 自定义分类（builtin === false）两边都要显示：
+        // 支出侧的自定义分类要出现在「消费」里，收入侧的出现在「收入」里。
+        // 这里靠 builtin 标志和列表来源区分，不靠 id 前缀猜。
         const list = st.type === 'income' || st.type === 'redpacket'
           ? INCOME_CATEGORIES
           : CATEGORIES;
@@ -165,7 +171,8 @@ export function openQuickEntry(opts = {}) {
           st.category = list[0].id;
         }
         catsEl.innerHTML = list.map((c) => `
-          <button type="button" data-cat="${c.id}" class="${c.id === st.category ? 'active' : ''}">
+          <button type="button" data-cat="${c.id}" class="${c.id === st.category ? 'active' : ''}"
+                  ${c.color ? `style="--cat-color:${esc(c.color)}"` : ''}>
             <span class="e">${c.icon || '•'}</span>${esc(c.name)}
           </button>`).join('');
       }
@@ -251,6 +258,16 @@ export function openQuickEntry(opts = {}) {
 
       // 记录用户是否手动点过分类（点过就不再被自动猜测覆盖）
       catsEl.addEventListener('click', () => { st.userTouchedCategory = true; });
+
+      // 「新建 / 管理分类」——这个查询必须放在 body.innerHTML 赋值之后，
+      // 否则拿到 null，按钮点了没反应。
+      const manageBtn = body.querySelector('#qe-manage');
+      if (manageBtn) {
+        manageBtn.addEventListener('click', async () => {
+          const { openCategoryManager } = await import('./category-sheets.js');
+          openCategoryManager();
+        });
+      }
 
       dateEl.addEventListener('change', () => { st.date = dateEl.value; });
       accountEl.addEventListener('input', () => { st.account = accountEl.value; });
