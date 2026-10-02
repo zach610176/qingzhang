@@ -43,14 +43,33 @@ export function netSpend(txs) {
   return Math.max(0, totalExpense(txs) - totalRefund(txs));
 }
 
-/** 真实收入（工资/奖金/其他收入 + 红包；退款不算） */
+/**
+ * 真实收入（工资/奖金/其他收入 + 红包；退款不算）。
+ *
+ * ⚠️ 必须排除攒钱记录。
+ * 「从储蓄取出」在数据上用 type='income' 表达（资金回到日常账户），
+ * 如果这里不过滤，取自己的钱会被算成「赚到了钱」，结余凭空变大。
+ * 实测过：收入 2000 + 取出储蓄 200 → 会显示成 2200。
+ */
 export function totalIncome(txs) {
-  return sum(txs, (t) => (isActive(t) && (t.type === 'income' || t.type === 'redpacket') ? t.amountCents : 0));
+  return sum(txs, (t) => (
+    isActive(t)
+      && !t.savings
+      && (t.type === 'income' || t.type === 'redpacket')
+      ? t.amountCents
+      : 0
+  ));
 }
 
 /** 内部转账 + 还款总额（仅展示，不进结余） */
 export function totalMoved(txs) {
-  return sum(txs, (t) => (isActive(t) && (t.type === 'transfer' || t.type === 'repay') ? t.amountCents : 0));
+  return sum(txs, (t) => (
+    isActive(t)
+      && !t.savings
+      && (t.type === 'transfer' || t.type === 'repay')
+      ? t.amountCents
+      : 0
+  ));
 }
 
 /* ------------------------------------------------------------------ *
