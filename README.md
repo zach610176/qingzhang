@@ -151,6 +151,10 @@ AES 加密的 ZIP 会**明确报错**而不是给错数据。
 | `node tools/verify-all.mjs` | **一键全量验证**，最后给汇总表 |
 | `node tools/check-modules.mjs` | 逐个 import 每个模块，抓语法/导入错误 |
 | `node tools/check-shell.mjs` | 校验 index.html 与 shell.html 两份外壳没有走样 |
+| `node tools/check-sw-assets.mjs` | 校验 sw.js 的离线缓存清单没漏文件（漏了会离线白屏） |
+| `node tools/test-sw-check.mjs` | 上面那个检查的**负向测试**：故意破坏清单，确认它真的会报错 |
+| `node tools/check-invariants.mjs` | 统计口径不变量（分类净额之和、占比合计等） |
+| `node tools/check-categories.mjs` | 自定义分类行为（增删改名、删除后交易去哪） |
 | `node tools/smoke.mjs` | 假 DOM + 内存数据库，把所有页面和筛选组合渲染一遍 |
 | `node tools/audit-numbers.mjs` | 独立重算所有数字，与界面渲染结果对账 |
 | `node tools/verify-offline.mjs` | 真 Chrome 无头：SW 注册、缓存完整性、断网重载、离线记账 |
@@ -190,14 +194,37 @@ DSH 的 Windows 沙箱禁止开管道，会报 `spawn EPERM`。
 `node tools/verify-all.mjs` 全绿：
 
 ```
-模块自检      28/28
-外壳一致性     index.html 与 shell.html 同步
-单元测试       177 / 177（7 个测试文件）
-界面冒烟       47/47 场景
-数字一致性审计  966 项
-离线能力       通过（断网可打开、可记账、缓存 34 个文件完整）
-截图          14 张，零页面异常
+模块自检        31/31
+外壳一致性       index.html 与 shell.html 同步
+离线缓存清单     28 个模块无遗漏
+缓存检查负向测试   4/4（证明这个检查会真的报错，不是永远通过）
+统计口径不变量    35 项成立
+自定义分类行为    25/25
+单元测试        199 / 199（8 个测试文件）
+界面冒烟        60/60 场景
+数字一致性审计    966 项
+离线能力        通过（断网可打开、可记账、缓存完整）
+截图           17 张，零页面异常
 ```
+
+### Node 里怎么跑数据库
+
+`src/core/db.js` 自己判断环境：在 Node 里自动使用内存后端
+（`isNodeEnv()` + `createMemoryIDB()`），模拟 IndexedDB 的事务时序。
+
+早期做法是用 Node 的模块加载钩子把 `db.js` 替换掉，**但那个做法不可靠**：
+ES 模块的静态依赖在钩子生效之前就已解析，结果「真 db」和「内存 db」
+会同时存在两份实例，谁拿到哪一份取决于导入顺序 ——
+表现为「有的测试能写数据库，有的报『不支持 IndexedDB』」。
+改成在 db.js 内部判断环境后，不管谁导入都只有一种行为。
+
+### 两个会重复踩的坑，都做了自动检查
+
+1. **加了新模块忘了写进 sw.js 的 ASSETS** → 离线白屏，本地却完全正常。
+   `tools/check-sw-assets.mjs` 从 `app.js` 顺着 import 递归比对清单。
+   `tools/test-sw-check.mjs` 是它的负向测试（故意破坏清单，确认会报错）。
+2. **改了代码没升 `sw.js` 的 `VERSION`** → 已装到主屏的旧版本继续用旧缓存。
+   改版本号会让 activate 阶段清掉旧缓存重新拉取。
 
 测试覆盖的重点：
 - **账单解析**：微信/支付宝的真实表头结构、前言区、GBK 编码、BOM、
