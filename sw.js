@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.2.2';
+const VERSION = 'v1.2.3';
 const CACHE = 'qingzhang-' + VERSION;
 
 // 相对路径，部署到子目录也能用
@@ -136,39 +136,49 @@ self.addEventListener('fetch', (ev) => {
     return;
   }
 
-  // 静态资源：**先联网拿最新的**，失败（离线）才用缓存。
+  // 静态资源：**先给缓存**（打开就是瞬间的），同时后台去拿最新的存起来。
   //
-  // ⚠️ 这里以前用的是「先给缓存、后台静默更新」（stale-while-revalidate）。
-  // 那是个错误的选择：意味着用户**打开时看到的永远是上一次的版本**，
-  // 必须再打开一次才更新。结果是 —— 我加了「攒钱」功能、部署好了、
-  // 线上代码也没问题，但用户手机上根本看不到，以为功能没做。
+  // 这里在两种策略之间摇摆过，最终选了「缓存优先 + 后台更新 + 自动刷新」：
   //
-  // 对手机 App 来说这体验是错的。改成网络优先之后：
-  //   · 有网 → 立刻拿到最新版
-  //   · 断网 → 回退缓存（离线能力不受影响）
-  // 代价是每次打开都要走一次网络，但轻账总共才三四百 KB，可以接受。
+  //   1. 纯缓存优先（最早的做法）
+  //      问题：打开时永远是上一次的版本，第二次打开才更新。
+  //      结果我加了「攒钱」功能、部署成功、线上代码也没错，
+  //      但用户手机上根本看不到，以为功能没做。
+  //
+  //   2. 纯网络优先
+  //      问题：每次打开、每个文件都要等网络往返，**App 感觉变慢了、按键不跟手**。
+  //      用户反馈「没那么顺畅了」。
+  //
+  //   3. 现在的做法：先给缓存 → 立刻显示；同时后台请求最新版写进缓存。
+  //      如果后台发现 sw.js 有变化，浏览器会装新的 Service Worker，
+  //      activate 时清掉旧缓存，页面的 controllerchange 会**自动刷新一次**，
+  //      于是用户既拿到了秒开，也拿到了最新版。
+  //
+  // 关键点：更新靠的是「sw.js 版本号变了」，不是靠每个文件都走网络。
+  // 所以改代码后记得升 VERSION（tools/check-sw-assets.mjs 会提醒清单，版本号靠自觉）。
   ev.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    try {
-      const fresh = await fetch(req);
-      if (fresh && fresh.ok && fresh.type === 'basic') {
-        cache.put(req, fresh.clone());
-      }
-      return fresh;
-    } catch (e) {
-      // 离线：回退缓存
-      const cached = await cache.match(req, { ignoreSearch: false });
-      if (cached) return cached;
+    const cached = await cache.match(req, { ignoreSearch: false });
 
-      // 缓存里也没有
-      if (req.destination === 'image') {
-        return new Response('', { status: 404 });
-      }
-      return new Response('// 离线且未缓存：' + url.pathname, {
-        status: 504,
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      });
+    // 后台更新，不阻塞返回
+    const networkPromise = fetch(req).then((res) => {
+      if (res && res.ok && res.type === 'basic') cache.put(req, res.clone());
+      return res;
+    }).catch(() => null);
+
+    if (cached) return cached;
+
+    // 缓存里没有（首次安装、或新增的文件）→ 必须等网络
+    const fresh = await networkPromise;
+    if (fresh) return fresh;
+
+    if (req.destination === 'image') {
+      return new Response('', { status: 404 });
     }
+    return new Response('// 离线且未缓存：' + url.pathname, {
+      status: 504,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   })());
 });
 
