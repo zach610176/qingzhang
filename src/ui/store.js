@@ -11,6 +11,7 @@ import { ym, shiftMonth, prevMonth } from '../core/model.js';
 import { generateRecurring } from '../core/recurring.js';
 import { defaultBudget } from '../core/budget.js';
 import { availableMonths } from '../core/stats.js';
+import { loadCustomCategories } from '../core/categories.js';
 
 export const state = {
   ready: false,
@@ -24,7 +25,9 @@ export const state = {
 
   month: ym(new Date()),
   tab: 'home',
-  statsRange: 'month',  // 'month' | 'quarter' | 'year' | 'all'
+  statsRange: 'month',  // 'month' | 'quarter' | 'year' | 'all' | 'annual'
+  /** 年度报告当前看的年份，空表示自动选（今年有数据就今年，否则最近一年） */
+  reportYear: '',
 
   detail: {
     query: '',
@@ -88,6 +91,10 @@ export async function init() {
 }
 
 export async function reloadAll() {
+  // 自定义分类必须最先载入：统计、记账面板、分类筛选都依赖它。
+  // 如果晚于界面渲染，就会出现「分类还没加载完、界面已经画好」的错位。
+  await loadCustomCategories();
+
   const [txs, rules, settings, batches, recurring] = await Promise.all([
     db.allTx(),
     db.allRules(),
