@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const CACHE = 'qingzhang-' + VERSION;
 
 // 相对路径，部署到子目录也能用
@@ -53,6 +53,7 @@ const ASSETS = [
   './src/core/import.js',
   './src/core/rules.js',
   './src/core/categories.js',
+  './src/core/savings.js',
   './src/ui/app.js',
   './src/ui/store.js',
   './src/ui/dom.js',
@@ -66,6 +67,7 @@ const ASSETS = [
   './src/ui/screen-budget.js',
   './src/ui/screen-settings.js',
   './src/ui/screen-year.js',
+  './src/ui/screen-savings.js',
   './src/ui/category-sheets.js',
 ];
 
