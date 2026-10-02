@@ -11,6 +11,7 @@ import {
   breakdownBy, activeTxs, filterMonth, comparison,
 } from '../core/stats.js';
 import { esc, fmtMoney, fmtDate, openSheet, toastOk } from './dom.js';
+import { renderYearReport } from './screen-year.js';
 import * as store from './store.js';
 
 const RANGES = [
@@ -18,11 +19,18 @@ const RANGES = [
   { id: 'quarter', name: '近3月' },
   { id: 'year', name: '本年' },
   { id: 'all', name: '全部' },
+  { id: 'annual', name: '年度报告' },
 ];
 
 export function renderStats(root) {
   const all = store.state.txs;
   const range = store.state.statsRange;
+
+  // 「年度报告」是另一种整页视图，直接交给 screen-year.js 渲染
+  if (range === 'annual') {
+    renderYearReport(root);
+    return;
+  }
 
   const { list, label } = resolveRange(all, range);
   const active = activeTxs(list);
