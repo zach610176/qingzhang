@@ -15,7 +15,9 @@ import {
 } from './screen-settings.js';
 import { openImportSheet, openBatchListSheet, initFilePicker } from './import-screen.js';
 import { openQuickEntry } from './sheets.js';
+import { openCategoryManager } from './category-sheets.js';
 import { openSheet, toastOk, toastErr, toastWarn, pickMonth, esc, fmtMoney, fmtDate } from './dom.js';
+import { CATEGORIES, INCOME_CATEGORIES } from '../core/model.js';
 
 /* ------------------------------------------------------------------ *
  * 启动
@@ -55,17 +57,92 @@ export async function boot() {
 
   registerServiceWorker();
 
-  // 主屏幕快捷方式：?action=quick / ?action=import
-  const action = new URLSearchParams(location.search).get('action');
-  if (action === 'quick') {
-    setTimeout(() => openQuickEntry(), 350);
-  } else if (action === 'import') {
+  // 网址参数（主屏幕快捷方式 / iPhone 快捷指令用）
+  const launch = parseLaunchParams();
+  if (launch.action === 'quick') {
+    setTimeout(() => openQuickEntry(launch.entry), 350);
+  } else if (launch.action === 'import') {
     setTimeout(() => openImportSheet(), 350);
+  } else if (launch.action === 'annual') {
+    store.state.statsRange = 'annual';
+    store.setTab('stats');
   } else if (!store.state.txs.length && !store.state.settings.demoAsked) {
     // 数据为空时，问一句要不要先看演示数据
     store.setSetting('demoAsked', true).catch(() => {});
     setTimeout(askDemo, 600);
   }
+}
+
+/**
+ * 解析网址参数，支持「一键记账」。
+ *
+ * 用途：把一条长网址存成 iPhone 快捷指令，点一下就直接打开填好的记账面板。
+ * 例如：
+ *   ?action=quick&amount=18&merchant=瑞幸&category=food
+ *   ?action=quick&merchant=食堂&type=expense
+ *   ?action=annual                  直接跳到年度报告
+ *
+ * 全部参数都是可选的；给了就预填，没给就照常手输。
+ * 参数名和取值都做了白名单校验 —— 网址是可以被随便构造的，
+ * 不能让它塞进奇怪的东西（比如把一个不存在的分类 id 塞进来）。
+ */
+export function parseLaunchParams(search) {
+  const q = new URLSearchParams(search != null ? search : (typeof location !== 'undefined' ? location.search : ''));
+
+  const actionRaw = (q.get('action') || '').toLowerCase();
+  const action = ['quick', 'import', 'annual'].includes(actionRaw) ? actionRaw : '';
+
+  if (action !== 'quick') return { action };
+
+  const entry = {};
+
+  // 金额：只接受正数，转成「分」
+  //
+  // ⚠️ 这里不能简单地把非数字字符全删掉再转数字。
+  // 曾经写成 String(amount).replace(/[^\d.]/g,'')，于是 "-5" 会被清洗成 "5"，
+  // 一个负数金额就变成了正数被接受。必须只在「去掉货币符号和千分位」之后，
+  // 再检查整体是不是一个合法的正数。
+  const amount = q.get('amount');
+  if (amount != null && amount !== '') {
+    const cleaned = String(amount).trim()
+      .replace(/^[¥￥$]/, '')        // 去掉开头的货币符号
+      .replace(/[,，]/g, '');        // 去掉千分位
+    // 只允许「数字.数字」这种形态，负号、字母、多个小数点一律拒绝
+    if (/^\d+(\.\d+)?$/.test(cleaned)) {
+      const n = Number(cleaned);
+      if (Number.isFinite(n) && n > 0 && n < 1e9) {
+        entry.amountCents = Math.round(n * 100);
+      }
+    }
+  }
+
+  // 商户 / 说明
+  const merchant = (q.get('merchant') || '').trim().slice(0, 40);
+  if (merchant) entry.merchant = merchant;
+
+  // 交易类型：必须在支持的手动类型里
+  const typeRaw = (q.get('type') || '').toLowerCase();
+  const validTypes = ['expense', 'income', 'redpacket', 'transfer', 'repay'];
+  if (validTypes.includes(typeRaw)) entry.type = typeRaw;
+
+  // 分类：必须是当前真实存在的分类（含自定义），否则忽略
+  const catRaw = (q.get('category') || '').trim();
+  if (catRaw) {
+    const lane = (entry.type === 'income' || entry.type === 'redpacket') ? INCOME_CATEGORIES : CATEGORIES;
+    if (lane.some((c) => c.id === catRaw)) entry.category = catRaw;
+  }
+
+  // 账户 / 备注
+  const account = (q.get('account') || '').trim().slice(0, 30);
+  if (account) entry.account = account;
+  const note = (q.get('note') || '').trim().slice(0, 60);
+  if (note) entry.note = note;
+
+  // 日期：只接受 YYYY-MM-DD
+  const date = (q.get('date') || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) entry.date = date;
+
+  return { action, entry };
 }
 
 /**
@@ -173,8 +250,10 @@ async function onScreenClick(ev) {
     case 'restore': openRestoreSheet(); break;
     case 'csv': exportCSV(); break;
     case 'rules': openRulesSheet(); break;
+    case 'categories': openCategoryManager(); break;
     case 'selfnames': openSelfNamesSheet(); break;
     case 'recurring': openRecurringSheet(); break;
+    case 'annual': store.state.statsRange = 'annual'; store.setTab('stats'); break;
     case 'dedupe': cleanDuplicates(); break;
     case 'clear': clearAllData(); break;
     case 'toggle-basis': break;
