@@ -65,6 +65,7 @@ export async function boot() {
   bootEl.hidden = true;
 
   registerServiceWorker();
+  loadAppVersion();
 
   // 网址参数（主屏幕快捷方式 / iPhone 快捷指令用）
   const launch = parseLaunchParams();
@@ -157,13 +158,16 @@ export function parseLaunchParams(search) {
 /**
  * 注册离线缓存。
  *
- * ⚠️ 两个坑：
+ * ⚠️ 三个坑：
  *  1. 浏览器只在「安全上下文」下允许 Service Worker，即 https:// 或 localhost。
  *     用 http://192.168.x.x 打开时 SW 不会生效，离线能力也就没有。
  *  2. 注册必须尽早。如果只写 window.addEventListener('load', ...)，
  *     而启动流程（读数据库、动态 import）耗时超过了 load 事件，
  *     这个监听器就永远不会被触发 —— SW 静悄悄地不注册。
  *     所以要先判断 document.readyState。
+ *  3. 新版本装好了，**当前这个页面仍然是旧代码在跑**。
+ *     必须重新加载才能用上新代码。用户不会自己去刷新，
+ *     所以这里监听 controllerchange 自动刷新一次。
  */
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
@@ -177,11 +181,31 @@ function registerServiceWorker() {
     return;
   }
 
+  // 新 SW 接管后自动刷新一次，让页面用上新代码。
+  // 用一个标记防止无限刷新：一次会话里只刷一次。
+  let reloadingForUpdate = false;
+  let lastController = navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    store.state.offlineAvailable = true;
+    if (!lastController) {
+      // 首次安装：现在才有 controller，不需要刷新（页面本来就用的是最新代码）
+      lastController = navigator.serviceWorker.controller;
+      return;
+    }
+    if (reloadingForUpdate) return;
+    reloadingForUpdate = true;
+    console.log('[轻账] 检测到新版本，正在刷新…');
+    location.reload();
+  });
+
   const doRegister = () => {
     navigator.serviceWorker.register('./sw.js').then(
       (reg) => {
         store.state.offlineAvailable = true;
+        // 存起来，「检查更新」按钮要用
+        store.state.swRegistration = reg;
         console.log('[轻账] 离线缓存已就绪，作用域 ' + reg.scope);
+        // 主动检查更新：手机上 App 常常长期不关，光靠浏览器自己轮询可能等很久
         reg.update().catch(() => {});
       },
       (err) => {
@@ -195,6 +219,59 @@ function registerServiceWorker() {
     doRegister();
   } else {
     window.addEventListener('load', doRegister, { once: true });
+  }
+}
+
+/**
+ * 读出当前运行的版本号。
+ *
+ * 版本号保存在 sw.js 里（单一来源）——它决定缓存名，改它才会触发更新。
+ * 这里直接 fetch 那个文件把版本号读出来，避免在两个地方各写一份、
+ * 时间一长就对不上。读不到就显示「未知」，不影响使用。
+ */
+async function loadAppVersion() {
+  try {
+    const res = await fetch('./sw.js', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const m = text.match(/const\s+VERSION\s*=\s*['"]([^'"]+)['"]/);
+    store.state.appVersion = m ? m[1] : '未知';
+  } catch (e) {
+    store.state.appVersion = '未知';
+  }
+}
+
+/**
+ * 手动检查更新。
+ *
+ * 手机上 App 常常长期不关（切后台不算关），服务端发了新版本也不会自动生效。
+ * 这里让用户主动触发一次：问服务端要最新的 sw.js，
+ * 如果确实有变化，浏览器会装一个新的 Service Worker，
+ * 它接管后 controllerchange 会触发一次自动刷新，新版本就生效了。
+ */
+async function checkForUpdate() {
+  const reg = store.state.swRegistration;
+  if (!reg) {
+    toastWarn('离线缓存还没准备好，稍后再试');
+    return;
+  }
+  toast('正在检查更新…');
+  try {
+    await reg.update();
+    // 给浏览器一点时间完成安装
+    await new Promise((r) => setTimeout(r, 1200));
+    if (reg.installing || reg.waiting) {
+      toastOk('发现新版本，正在刷新…');
+      // 让新的 SW 立刻接管（sw.js 里 install 时会 skipWaiting）
+      if (reg.waiting) reg.waiting.postMessage('skip-waiting');
+      // controllerchange 会触发刷新；万一没触发，这里兜底
+      setTimeout(() => location.reload(), 1500);
+    } else {
+      const v = store.state.appVersion || '当前版本';
+      toastOk(`已是最新版本（${v}）`);
+    }
+  } catch (e) {
+    toastErr('检查更新失败：' + (e && e.message ? e.message : e));
   }
 }
 
@@ -288,6 +365,7 @@ async function onScreenClick(ev) {
     case 'recurring': openRecurringSheet(); break;
     case 'annual': store.state.statsRange = 'annual'; store.setTab('stats'); break;
     case 'dedupe': cleanDuplicates(); break;
+    case 'check-update': checkForUpdate(); break;
     case 'clear': clearAllData(); break;
     case 'toggle-basis': break;
     default: break;
