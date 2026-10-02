@@ -41,6 +41,8 @@ export const state = {
   storage: { persisted: false, supported: false, usage: 0, quota: 0 },
   /** Service Worker 是否注册成功，决定能不能离线用 */
   offlineAvailable: null,
+  /** 当前运行的版本号（从 sw.js 读取） */
+  appVersion: '',
   showDuplicates: false,
 };
 
