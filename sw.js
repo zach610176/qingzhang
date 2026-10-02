@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.2.1';
 const CACHE = 'qingzhang-' + VERSION;
 
 // 相对路径，部署到子目录也能用
@@ -136,29 +136,39 @@ self.addEventListener('fetch', (ev) => {
     return;
   }
 
-  // 静态资源：先给缓存，同时后台静默更新
+  // 静态资源：**先联网拿最新的**，失败（离线）才用缓存。
+  //
+  // ⚠️ 这里以前用的是「先给缓存、后台静默更新」（stale-while-revalidate）。
+  // 那是个错误的选择：意味着用户**打开时看到的永远是上一次的版本**，
+  // 必须再打开一次才更新。结果是 —— 我加了「攒钱」功能、部署好了、
+  // 线上代码也没问题，但用户手机上根本看不到，以为功能没做。
+  //
+  // 对手机 App 来说这体验是错的。改成网络优先之后：
+  //   · 有网 → 立刻拿到最新版
+  //   · 断网 → 回退缓存（离线能力不受影响）
+  // 代价是每次打开都要走一次网络，但轻账总共才三四百 KB，可以接受。
   ev.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const cached = await cache.match(req, { ignoreSearch: false });
+    try {
+      const fresh = await fetch(req);
+      if (fresh && fresh.ok && fresh.type === 'basic') {
+        cache.put(req, fresh.clone());
+      }
+      return fresh;
+    } catch (e) {
+      // 离线：回退缓存
+      const cached = await cache.match(req, { ignoreSearch: false });
+      if (cached) return cached;
 
-    const networkPromise = fetch(req).then((res) => {
-      if (res && res.ok && res.type === 'basic') cache.put(req, res.clone());
-      return res;
-    }).catch(() => null);
-
-    if (cached) return cached;
-
-    const fresh = await networkPromise;
-    if (fresh) return fresh;
-
-    // 都拿不到
-    if (req.destination === 'image') {
-      return new Response('', { status: 404 });
+      // 缓存里也没有
+      if (req.destination === 'image') {
+        return new Response('', { status: 404 });
+      }
+      return new Response('// 离线且未缓存：' + url.pathname, {
+        status: 504,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
     }
-    return new Response('// 离线且未缓存：' + url.pathname, {
-      status: 504,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    });
   })());
 });
 
