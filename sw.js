@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.2.1';
+const VERSION = 'v1.2.2';
 const CACHE = 'qingzhang-' + VERSION;
 
 // 相对路径，部署到子目录也能用
