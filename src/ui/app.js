@@ -16,6 +16,11 @@ import {
 import { openImportSheet, openBatchListSheet, initFilePicker } from './import-screen.js';
 import { openQuickEntry } from './sheets.js';
 import { openCategoryManager } from './category-sheets.js';
+import {
+  renderSavings, openSavingsEntry, openSavingsGoal, openMonthlyTarget,
+  openSavingsAccount, openSavingsScan,
+} from './screen-savings.js';
+import { loadSettings as loadSavings } from '../core/savings.js';
 import { openSheet, toastOk, toastErr, toastWarn, pickMonth, esc, fmtMoney, fmtDate } from './dom.js';
 import { CATEGORIES, INCOME_CATEGORIES } from '../core/model.js';
 
@@ -39,6 +44,10 @@ export async function boot() {
 
   try {
     await store.init();
+    // 攒钱设置也在这里载入。
+    // 放在 app.js 而不是 store.reloadAll()，是为了避免 store ↔ savings 的循环导入
+    // （savings 依赖 stats，store 也依赖 stats）。
+    store.state.savingsSettings = await loadSavings();
   } catch (e) {
     bootEl.hidden = true;
     appEl.hidden = true;
@@ -218,6 +227,23 @@ function wireNav() {
 }
 
 async function onScreenClick(ev) {
+  // 攒钱页的操作（存/取/设目标/扫描账单）
+  const svEl = ev.target.closest('[data-sv]');
+  if (svEl) {
+    switch (svEl.dataset.sv) {
+      case 'in': openSavingsEntry('in'); break;
+      case 'out': openSavingsEntry('out'); break;
+      case 'goal': openSavingsGoal(); break;
+      case 'monthly': openMonthlyTarget(); break;
+      case 'account': openSavingsAccount(); break;
+      case 'scan': openSavingsScan(); break;
+    }
+    return;
+  }
+  // 攒钱明细里点某一笔 → 打开普通的交易详情
+  const svTx = ev.target.closest('[data-sv-tx]');
+  if (svTx) { openTxSheet(svTx.dataset.svTx); return; }
+
   // 交易行
   const txRow = ev.target.closest('[data-tx]');
   if (txRow) { openTxSheet(txRow.dataset.tx); return; }
@@ -251,6 +277,13 @@ async function onScreenClick(ev) {
     case 'csv': exportCSV(); break;
     case 'rules': openRulesSheet(); break;
     case 'categories': openCategoryManager(); break;
+    case 'savings': store.setTab('savings'); break;
+    case 'savings-in': openSavingsEntry('in'); break;
+    case 'savings-out': openSavingsEntry('out'); break;
+    case 'savings-goal': openSavingsGoal(); break;
+    case 'savings-monthly': openMonthlyTarget(); break;
+    case 'savings-account': openSavingsAccount(); break;
+    case 'savings-scan': openSavingsScan(); break;
     case 'selfnames': openSelfNamesSheet(); break;
     case 'recurring': openRecurringSheet(); break;
     case 'annual': store.state.statsRange = 'annual'; store.setTab('stats'); break;
@@ -337,6 +370,7 @@ function renderAll() {
     else if (tab === 'detail') renderDetail(document.getElementById('detail-body'));
     else if (tab === 'stats') renderStats(document.getElementById('stats-body'));
     else if (tab === 'budget') renderBudget(document.getElementById('budget-body'));
+    else if (tab === 'savings') renderSavings(document.getElementById('savings-body'));
     else if (tab === 'settings') renderSettings(document.getElementById('settings-body'));
   } catch (e) {
     console.error('[轻账] 渲染失败', e);
