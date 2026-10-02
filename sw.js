@@ -8,14 +8,29 @@
  *   - 其他请求：一律不出网。轻账没有任何服务器，出现预期外的请求直接失败。
  */
 
-const VERSION = 'v1.0.1';
+/**
+ * 缓存版本号。
+ *
+ * ⚠️ 每次改动 src/ 下的代码或 styles.css 之后，**必须把这个号加一**。
+ * 否则已经装到手机主屏幕的旧版本会继续用旧缓存，
+ * 用户看到的还是老界面，会以为「没更新」。
+ * 改版本号会让 activate 阶段删掉旧缓存、重新拉一遍文件。
+ *
+ *   补丁级：v1.1.0 → v1.1.1   改 bug、改文案
+ *   次版本：v1.1.0 → v1.2.0   加功能
+ *   主版本：v1.1.0 → v2.0.0   改数据结构
+ */
+const VERSION = 'v1.1.0';
 const CACHE = 'qingzhang-' + VERSION;
 
 // 相对路径，部署到子目录也能用
 // 注意：这份清单要和 src/ 下真实存在的文件保持一致。
 // 核对命令：node tools/verify-offline.mjs（它会照着 index.html 和 import 关系反推所需文件）
 const ASSETS = [
-  './',
+  // 入口文件必须显式列出。
+  // 注意不要只写 './'：那样离线时 cache.match('./index.html') 能否命中
+  // 取决于 Cache API 把 './' 和 './index.html' 视为同一资源的实现细节，
+  // 显式列出来最稳妥（tools/check-sw-assets.mjs 会强制要求这一项）。
   './index.html',
   './styles.css',
   './sw.js',
@@ -37,6 +52,7 @@ const ASSETS = [
   './src/core/recurring.js',
   './src/core/import.js',
   './src/core/rules.js',
+  './src/core/categories.js',
   './src/ui/app.js',
   './src/ui/store.js',
   './src/ui/dom.js',
@@ -49,6 +65,8 @@ const ASSETS = [
   './src/ui/screen-stats.js',
   './src/ui/screen-budget.js',
   './src/ui/screen-settings.js',
+  './src/ui/screen-year.js',
+  './src/ui/category-sheets.js',
 ];
 
 self.addEventListener('install', (ev) => {
