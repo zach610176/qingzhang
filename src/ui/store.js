@@ -22,6 +22,8 @@ export const state = {
   recurring: [],
   batches: [],
   settings: {},
+  /** 攒钱设置（账户名、目标、每月目标）。由 app.js 在启动时载入 */
+  savingsSettings: null,
 
   month: ym(new Date()),
   tab: 'home',
