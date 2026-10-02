@@ -7,6 +7,7 @@
 import { CATEGORIES, category as getCategory, txType, txIcon, txCategoryLabel, money, monthRange, monthLabel, monthLabelFull } from '../core/model.js';
 import { overview, categoryBreakdown, comparison, activeTxs, filterMonth } from '../core/stats.js';
 import { budgetStatus, budgetAlerts } from '../core/budget.js';
+import { computeSavings } from '../core/savings.js';
 import { esc, fmtMoney, fmtDate, fmtDayLabel, fmtTime, pickMonth } from './dom.js';
 import * as store from './store.js';
 
@@ -78,6 +79,8 @@ export function renderHome(root) {
     </div>
 
     ${alerts.length ? alerts.slice(0, 2).map(renderAlert).join('') : ''}
+
+    ${renderSavingsCard(all, monthTxs)}
 
     ${bStatus.hasTotal ? renderBudgetLine(bStatus) : renderBudgetPrompt()}
 
@@ -161,6 +164,107 @@ function renderBudgetPrompt() {
         </span>
         <span class="row-chev">${chevSvg()}</span>
       </div>
+    </div>`;
+}
+
+/**
+ * 首页的攒钱卡片。
+ *
+ * 设计考虑：刚开始用时这个数字是 0，所以文案要「鼓励」而不是「报警」。
+ * 优先显示能推动下一步的那个数字 ——
+ * 有目标就显示离目标还差多少，有该转没转的就提醒去转，否则显示本月进度。
+ */
+function renderSavingsCard(all, monthTxs) {
+  const settings = store.state.savingsSettings;
+  if (!settings) return '';
+
+  let sv;
+  try {
+    sv = computeSavings(all, settings);
+  } catch (e) {
+    return '';
+  }
+
+  const goal = sv.goal;
+  const mt = sv.monthlyTarget;
+
+  // 还没开始攒钱，也没设目标 → 给一个轻量的引导
+  if (!sv.eventCount && !goal && !mt) {
+    return `
+      <div class="section-title between">
+        <span>攒钱</span>
+      </div>
+      <div class="card" style="margin:0 16px 16px">
+        <div class="row tappable" data-act="savings">
+          <span class="row-icon">🏦</span>
+          <span class="row-main">
+            <span class="row-title">开始攒钱</span>
+            <span class="row-sub">每月把生活费剩下的转进一个账户，这里会帮你盯着</span>
+          </span>
+          <span class="row-chev">${chevSvg()}</span>
+        </div>
+      </div>`;
+  }
+
+  // 决定主数字和副文案
+  let mainLabel = '一共产下';
+  let mainValue = sv.balance;
+  let sub = '';
+
+  if (goal && !goal.done) {
+    mainLabel = goal.label ? `离「${goal.label}」还差` : '离攒钱目标还差';
+    mainValue = goal.remaining;
+    sub = `已攒 ${fmtMoney(goal.saved)} / 目标 ${fmtMoney(goal.target, { decimals: 0 })}`;
+  } else if (goal && goal.done) {
+    mainLabel = goal.label ? `「${goal.label}」已达成 🎉` : '攒钱目标已达成 🎉';
+    mainValue = sv.balance;
+    sub = `目标 ${fmtMoney(goal.target, { decimals: 0 })}`;
+  } else {
+    sub = sv.eventCount ? `共 ${sv.eventCount} 笔攒钱记录` : '还没有攒钱记录';
+  }
+
+  const pct = goal ? Math.min(100, goal.percent) : 0;
+
+  return `
+    <div class="section-title between">
+      <span>攒钱</span>
+      <span class="link" data-act="savings">查看明细</span>
+    </div>
+    <div class="card" style="margin:0 16px 16px">
+      <div class="row tappable" data-act="savings" style="align-items:flex-start">
+        <span class="row-icon">🏦</span>
+        <span class="row-main">
+          <span class="row-title">${esc(mainLabel)}</span>
+          <span class="row-sub">${esc(sub)}</span>
+        </span>
+        <span class="row-value" style="align-self:flex-start;margin-top:2px;color:var(--green);font-size:19px;font-weight:700">${esc(fmtMoney(mainValue))}</span>
+      </div>
+      ${goal ? `
+      <div style="padding:0 16px 14px">
+        <div class="bar" style="height:8px;border-radius:4px;background:var(--fill);overflow:hidden">
+          <i style="display:block;height:100%;border-radius:4px;width:${pct}%;background:var(--green)"></i>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--label-2);margin-top:5px">
+          <span>${pct.toFixed(0)}%</span>
+          <span>${esc(fmtMoney(sv.balance, { decimals: 0 }))} / ${esc(fmtMoney(goal.target, { decimals: 0 }))}</span>
+        </div>
+      </div>` : ''}
+      ${sv.pendingTotal > 0 ? `
+      <div class="row tappable" data-act="savings" style="border-top:0.5px solid var(--separator)">
+        <span class="row-icon" style="background:rgba(255,159,10,0.16)">💡</span>
+        <span class="row-main">
+          <span class="row-title" style="color:var(--orange)">有 ${esc(fmtMoney(sv.pendingTotal, { decimals: 0 }))} 该攒没转走</span>
+          <span class="row-sub">结余里没变成实际存款的部分，点进去可以转</span>
+        </span>
+      </div>` : ''}
+      ${!goal && !mt ? `
+      <div class="row tappable" data-act="savings-goal" style="border-top:0.5px solid var(--separator)">
+        <span class="row-icon">🎯</span>
+        <span class="row-main">
+          <span class="row-title">设一个攒钱目标</span>
+          <span class="row-sub">看着进度条一点点满，比单纯记数字有动力</span>
+        </span>
+      </div>` : ''}
     </div>`;
 }
 
