@@ -39,10 +39,21 @@ export const state = {
   },
 
   storage: { persisted: false, supported: false, usage: 0, quota: 0 },
-  /** Service Worker 是否注册成功，决定能不能离线用 */
-  offlineAvailable: null,
+  /**
+   * 离线缓存的检查结果。
+   * 'pending' 还没查完 / 'ok' 已就绪 / 'insecure' 不是 https /
+   * 'unsupported' 浏览器不支持 / 'failed' 注册失败
+   *
+   * 用字符串而不是布尔值，是因为「还没查完」和「查失败」要给用户
+   * 完全不同的提示 —— 以前只有 null/true/false，
+   * 界面就永远卡在「正在检查…」上。
+   */
+  offlineCheck: 'pending',
+  offlineError: '',
   /** 当前运行的版本号（从 sw.js 读取） */
   appVersion: '',
+  /** Service Worker 的注册对象，「检查更新」按钮要用 */
+  swRegistration: null,
   showDuplicates: false,
 };
 
