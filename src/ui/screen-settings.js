@@ -61,10 +61,10 @@ export function renderSettings(root) {
         <span class="row-value muted">${fmtFileSize(st.storage.usage)}</span>
       </div>
       <div class="row">
-        <span class="row-icon">${st.offlineAvailable ? '📶' : '⚠️'}</span>
+        <span class="row-icon">${st.offlineCheck === 'ok' ? '📶' : st.offlineCheck === 'pending' ? '⏳' : '⚠️'}</span>
         <span class="row-main"><span class="row-title">离线可用</span>
         <span class="row-sub">${offlineExplain(st)}</span></span>
-        <span class="row-value muted small">${st.offlineAvailable ? '已开启' : '未开启'}</span>
+        <span class="row-value muted small">${offlineLabel(st)}</span>
       </div>
       ${row('🧹', '清理重复交易', '按指纹重新判定并删除重复项', 'dedupe')}
       ${row('⚠️', '清空所有数据', '不可恢复，请先导出备份', 'clear')}
@@ -138,11 +138,40 @@ function customCatCount() {
   return CATEGORIES.filter((c) => !c.builtin).length + INCOME_CATEGORIES.filter((c) => !c.builtin).length;
 }
 
-function offlineExplain(st) {  if (st.offlineAvailable === true) return '飞行模式下也能打开和记账';
-  if (st.offlineAvailable === false) {
-    return '当前地址不是 HTTPS（也不是 localhost），浏览器不允许网页应用做离线缓存。用 https 地址打开就能开启。';
+/** 离线状态的短标签 */
+function offlineLabel(st) {
+  switch (st.offlineCheck) {
+    case 'ok': return '已开启';
+    case 'pending': return '检查中';
+    case 'insecure': return '未开启';
+    case 'unsupported': return '不支持';
+    case 'failed': return '失败';
+    default: return '未知';
   }
-  return '正在检查…（浏览器只在 https 或 localhost 下允许离线缓存）';
+}
+
+/**
+ * 离线状态的说明文字。
+ *
+ * 每种状态都要给出**能行动的下一步**，不能只丢一句「正在检查…」就完事 ——
+ * 之前只有一个 null 分支，界面永远停在「正在检查」上，
+ * 用户完全不知道发生了什么、该怎么办。
+ */
+function offlineExplain(st) {
+  switch (st.offlineCheck) {
+    case 'ok':
+      return '飞行模式下也能打开和记账';
+    case 'pending':
+      return '正在向浏览器确认…（通常几秒内完成；如果一直停在这里，点下面的「检查更新」试试）';
+    case 'insecure':
+      return '当前地址不是 HTTPS（也不是 localhost），浏览器不允许网页应用做离线缓存。用 https 地址打开就能开启。';
+    case 'unsupported':
+      return '这个浏览器不支持离线缓存（Service Worker），换用 Safari 打开。';
+    case 'failed':
+      return `注册失败：${st.offlineError || '未知原因'}。点「检查更新」重试一次，还不行就是网络或浏览器限制了。`;
+    default:
+      return '状态未知';
+  }
 }
 
 function row(icon, title, sub, act) {
