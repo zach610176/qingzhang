@@ -12,7 +12,7 @@
  *   内部转账 / 信用卡还款：完全不参与以上任何一项
  */
 
-import { CATEGORIES, category, txType, countsAsSpend, refundAmount, cashFlow, ymd, ym, monthRange, prevMonth, daysInMonth } from './model.js';
+import { CATEGORIES, INCOME_CATEGORIES, category, txType, countsAsSpend, refundAmount, cashFlow, ymd, ym, monthRange, prevMonth, daysInMonth } from './model.js';
 import { groupBy, sum, percent, normalizeMerchant } from './util.js';
 
 /* ------------------------------------------------------------------ *
@@ -83,6 +83,11 @@ export function categoryBreakdown(txs, opts = {}) {
   }
 
   // 各分类先按「毛支出 / 归属退款」汇总；分母（grandNet）最后统一取消费净额。
+  //
+  // 注意两点：
+  //   1. 遍历的是 CATEGORIES（运行时清单，含用户自定义分类），不是内置常量
+  //   2. 兜底分类是「其他」而不是别的名字，用 find 而不是写死下标
+  const fallbackId = CATEGORIES.some((c) => c.id === 'other') ? 'other' : (CATEGORIES[CATEGORIES.length - 1] || {}).id;
   const rows = CATEGORIES.map((c) => {
     const cents = spendByCategory.get(c.id) || 0;
     const refundCents = refundByCategory.get(c.id) || 0;
@@ -99,6 +104,29 @@ export function categoryBreakdown(txs, opts = {}) {
       percent: 0,
     };
   });
+
+  // 有交易挂在一个已经不存在的分类上（分类被删过、或数据来自旧备份）时，
+  // 把这些金额归到兜底分类，否则它们会从占比里凭空消失、合计对不上首页。
+  const knownIds = new Set(CATEGORIES.map((c) => c.id));
+  let orphanCents = 0;
+  let orphanRefund = 0;
+  let orphanCount = 0;
+  for (const [id, cents] of spendByCategory) {
+    if (!knownIds.has(id)) { orphanCents += cents; orphanCount += countByCategory.get(id) || 0; }
+  }
+  for (const [id, cents] of refundByCategory) {
+    if (!knownIds.has(id)) orphanRefund += cents;
+  }
+  if (orphanCents || orphanRefund) {
+    const target = rows.find((r) => r.id === fallbackId) || rows[rows.length - 1];
+    if (target) {
+      target.cents += orphanCents;
+      target.refundCents += orphanRefund;
+      target.netCents = target.cents - target.refundCents;
+      target.count += orphanCount;
+      target.orphan = true;
+    }
+  }
 
   // 某个月里，退款可能比该分类当月的支出还多（例如退的是上个月的订单）。
   // 如果这时简单地把该分类夹到 0，多出来的退款就凭空消失了：
@@ -144,22 +172,60 @@ export function categoryBreakdown(txs, opts = {}) {
   return { rows: rows.filter((r) => r.cents > 0 || r.refundCents > 0), total: grandNet };
 }
 
-/** 退款归属：优先按分类字段；分类是 'refund' 时，靠商户名去找原消费 */
+/**
+ * 退款该归到哪个分类。
+ *
+ * 顺序很重要：
+ *   1. 如果这笔退款自己带了一个**真实消费分类**（不是 'refund' 这个占位符），直接用
+ *   2. 否则按商户名去找原消费，归到那笔消费的分类
+ *   3. 都找不到才留在「其他」
+ *
+ * ⚠️ 曾经踩过的坑：'refund' 是解析器给退款打的**占位分类**，它并不是一个消费分类。
+ * 早期代码判断「分类不是 other 就用它」，于是 'refund' 被当成有效分类直接返回，
+ * 第 2 步的商户匹配永远走不到 —— 结果所有退款都堆进「其他」，
+ * 而「其他」只有一点毛支出，退款远大于它，多出来的部分又被按比例摊到别的分类，
+ * 导致「购物」这类分类的金额被莫名削减（审计脚本正是这样抓出问题的）。
+ */
 function matchRefundCategory(refundTx, activeTxsList) {
-  const c = normalizeCategoryId(refundTx.category);
-  if (c && c !== 'other') return c;
+  // 占位分类：这些不是真正的消费分类，必须继续往下匹配
+  const PLACEHOLDER = new Set(['refund', 'other', '', 'redpacket', 'other_in']);
+
+  const own = refundTx.category;
+  if (own && !PLACEHOLDER.has(own)) {
+    const known = CATEGORIES.some((c) => c.id === own);
+    if (known) return own;
+  }
+
+  // 按商户找原消费。同商户有多笔时取金额最接近的那笔（部分退款很常见，
+  // 例如买了 839 元的东西退了 300 元，两者金额不会相等）。
+  //
+  // 这里**故意不加**「金额差异不能超过 N 倍」之类的守卫：
+  // 曾经加过 2 倍限制，结果 ¥839 的订单退 ¥300（2.8 倍）被判为不匹配，
+  // 退款又全部堆回「其他」，把分类金额按比例削减掉了 —— 正是要修掉的那个 bug。
+  // 商户名相同已经是足够强的信号，宁可匹配到同商户的另一笔，也不要把退款丢掉。
   const norm = normalizeMerchant(refundTx.merchant);
   if (norm) {
+    let best = null;
     for (const t of activeTxsList) {
       if (t.type !== 'expense') continue;
-      if (normalizeMerchant(t.merchant) === norm) return normalizeCategoryId(t.category);
+      if (normalizeMerchant(t.merchant) !== norm) continue;
+      const gap = Math.abs(t.amountCents - refundTx.amountCents);
+      if (!best || gap < best.gap) best = { t, gap };
+    }
+    if (best) {
+      const known = CATEGORIES.some((c) => c.id === best.t.category);
+      if (known) return best.t.category;
     }
   }
+
   return 'other';
 }
 
 function normalizeCategoryId(id) {
-  const known = CATEGORIES.some((c) => c.id === id);
+  // 自定义分类也是合法分类，不能因为「不在内置清单里」就丢进「其他」。
+  // 真的找不到（分类被删过、或数据来自别人的备份）才回退，
+  // 上面 categoryBreakdown 里还有一层 orphan 汇总，保证金额不会凭空消失。
+  const known = CATEGORIES.some((c) => c.id === id) || INCOME_CATEGORIES.some((c) => c.id === id);
   return known ? id : 'other';
 }
 
