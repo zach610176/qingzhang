@@ -61,11 +61,22 @@ export async function boot() {
   store.subscribe(renderAll);
   renderAll();
 
+  // 先把界面放出来，再做联网的事。
+  //
+  // ⚠️ 顺序很重要：以前 registerServiceWorker() 和 loadAppVersion()
+  // 写在前面，而 loadAppVersion 内部要 fetch('./sw.js')。
+  // 那次网络请求会把整个启动流程卡住 —— 用户感觉就是
+  // 「App 打开慢、按键不跟手」。启动流程里不该有网络请求。
   appEl.hidden = false;
   bootEl.hidden = true;
+  // 打个时间标记：自动化检查用它量启动耗时，防止「启动流程里塞网络请求」这类退化
+  try { performance.mark('boot-hidden'); } catch (e) { /* 老浏览器忽略 */ }
 
-  registerServiceWorker();
-  loadAppVersion();
+  // 这些都放到独立的一帧之后，确保界面已经能交互
+  requestAnimationFrame(() => {
+    registerServiceWorker();
+    loadAppVersion().catch(() => {});
+  });
 
   // 网址参数（主屏幕快捷方式 / iPhone 快捷指令用）
   const launch = parseLaunchParams();
