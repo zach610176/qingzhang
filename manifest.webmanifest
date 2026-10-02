@@ -1,0 +1,37 @@
+{
+  "name": "轻账",
+  "short_name": "轻账",
+  "description": "本地记账，数据只存在你的手机上。导入微信/支付宝账单，看清消费比例。",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
+  "categories": ["finance", "productivity"],
+  "prefer_related_applications": false,
+  "icons": [
+    { "src": "./assets/icon-120.png", "sizes": "120x120", "type": "image/png" },
+    { "src": "./assets/icon-152.png", "sizes": "152x152", "type": "image/png" },
+    { "src": "./assets/icon-167.png", "sizes": "167x167", "type": "image/png" },
+    { "src": "./assets/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "./assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./assets/icon-1024.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "记一笔",
+      "short_name": "记一笔",
+      "url": "./index.html?action=quick"
+    },
+    {
+      "name": "导入账单",
+      "short_name": "导入",
+      "url": "./index.html?action=import"
+    }
+  ]
+}
