@@ -301,7 +301,7 @@ export async function exportCSV() {
   const txs = store.state.txs.slice().sort((a, b) => b.ts - a.ts);
   if (!txs.length) { toastWarn('还没有数据可以导出'); return; }
 
-  const headers = ['时间', '类型', '分类', '商户', '说明', '金额(元)', '收支', '来源', '支付方式', '备注', '是否重复', '不计入统计'];
+  const headers = ['时间', '类型', '分类', '商户', '说明', '金额(元)', '收支', '来源', '支付方式', '备注', '是否重复', '不计入统计', '攒钱', '攒钱方向'];
   const lines = [headers.join(',')];
   for (const t of txs) {
     const ty = txType(t.type);
@@ -319,6 +319,9 @@ export async function exportCSV() {
       t.note,
       t.duplicateOf ? '是' : '',
       t.excluded ? '是' : '',
+      // 攒钱列：导出也要完整，否则用 Excel 核对时会对不上 App 里的数字
+      t.savings ? '是' : '',
+      t.savings ? (t.savingsDirection === 'out' ? '取出' : '存入') : '',
     ].map(csvCell).join(','));
   }
 
