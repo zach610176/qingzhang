@@ -41,13 +41,17 @@ export function renderHome(root) {
         <button type="button" class="btn primary" data-act="quick">记一笔</button>
         <button type="button" class="btn" data-act="import">导入账单</button>
       </div>
-      <div class="section-title mt16">支持的功能</div>
+      <div class="section-title mt16">可以做什么</div>
       <div class="card" style="margin:0 16px 16px">
-        ${featureRow('📄', '导入账单', '微信 / 支付宝的 CSV、ZIP 账单，自动去重')}
-        ${featureRow('🏷️', '自动分类', '改过一次就记住，下次自动分对')}
-        ${featureRow('📊', '消费比例', '看清钱花在哪些类别、哪些商户')}
-        ${featureRow('🎯', '预算提醒', '用到 80% 和超支时提示你')}
-        ${featureRow('🔒', '加密备份', '导出的备份文件带密码，可存 iCloud')}
+        ${tipRow('🪙', '开始记账', '先点上面的「记一笔」，输入金额就行', 'quick')}
+        ${tipRow('🏦', '攒钱', '每月把生活费剩下的转进一个账户，攒钱页会帮你盯着', 'savings')}
+        ${tipRow('📄', '导入账单', '微信 / 支付宝的 CSV、ZIP 账单，自动去重', 'import')}
+        ${tipRow('🏷️', '自定义分类', '内置十类之外，可以加「养猫」这种自己的分类', 'categories')}
+        ${tipRow('🎯', '设预算', '定个每月上限，用到 80% 和超支时提醒你', 'budget')}
+        ${tipRow('🔒', '加密备份', '导出的备份带密码，可存到 iCloud Drive', 'backup')}
+      </div>
+      <div class="px16 tiny muted" style="padding-bottom:20px">
+        以上每一项都可以点，会带你到对应的地方。
       </div>
     `;
     return;
@@ -385,9 +389,19 @@ export function txRow(t) {
   </div>`;
 }
 
-function featureRow(icon, title, sub) {
-  return `<div class="row"><span class="row-icon">${icon}</span>
-    <span class="row-main"><span class="row-title">${esc(title)}</span><span class="row-sub">${esc(sub)}</span></span></div>`;
+/**
+ * 空状态里的引导行。
+ *
+ * 这些行**必须真的能点**（带 data-act），否则就是一个假按钮 ——
+ * 用户会以为 App 坏了。早先这里写成了纯展示的 featureRow，
+ * 结果用户点了一圈都没反应，来问「为什么点了没用」。
+ */
+function tipRow(icon, title, sub, act) {
+  return `<div class="row tappable" data-act="${esc(act)}">
+    <span class="row-icon">${icon}</span>
+    <span class="row-main"><span class="row-title">${esc(title)}</span><span class="row-sub">${esc(sub)}</span></span>
+    <span class="row-chev">${chevSvg()}</span>
+  </div>`;
 }
 
 function quickRow(icon, title, sub, act) {
