@@ -4,6 +4,13 @@
 
 **没有服务器，没有账号，没有网络请求。** 数据全部存在浏览器的 IndexedDB 里。
 
+## 线上地址
+
+**https://zach610176.github.io/qingzhang/**
+
+托管在 GitHub Pages（HTTPS），Service Worker 与加密备份在线上均可用。
+代码托管是公开的，但**用户数据永远不上传** —— 应用运行时不发任何网络请求。
+
 ---
 
 ## 快速开始
@@ -17,10 +24,24 @@ node tools/qr.mjs
 
 # 3. 跑全量验证（模块自检 + 单元测试 + 冒烟 + 数字审计 + 离线 + 截图）
 node tools/verify-all.mjs
+
+# 4. 部署 / 更新到 GitHub Pages
+$env:GITHUB_TOKEN = "ghp_..."     # 需要 public_repo 权限的 classic token
+node tools/deploy-pages.mjs
 ```
 
 面向用户的说明在 [`使用说明.md`](使用说明.md)。想装到 iPhone 上，
 直接双击根目录的 `安装到手机.bat`。
+
+### 验证脚本也支持线上环境
+
+```bash
+node tools/verify-offline.mjs https://zach610176.github.io/qingzhang/
+node tools/shoot.mjs https://zach610176.github.io/qingzhang/ --demo
+```
+
+`--demo` 会先在页内载入演示数据再截图，这样才能对线上环境做数字校验
+（不带的线上环境是空库，首页是「欢迎」空状态）。
 
 ---
 
@@ -138,6 +159,7 @@ AES 加密的 ZIP 会**明确报错**而不是给错数据。
 | `node tools/qr.mjs` | 终端打印二维码，手机扫一扫就能打开 |
 | `node tools/make-icons.mjs` | 生成全部尺寸图标（纯 JS 写 PNG，无依赖） |
 | `node tools/snapshot.mjs` | **快照工具**（这台机器没有 git，用它兜底） |
+| `node tools/deploy-pages.mjs` | 部署／更新到 GitHub Pages（走 REST API，不需要 git） |
 | `node tools/setup-phone-access.ps1` | 加一条窄范围防火墙规则（**需要管理员**，带备份与撤销） |
 | `node tools/diag-sw.mjs` | Service Worker 注册失败时用来抓真实报错 |
 | `node tools/diag-parser.mjs` | 把账单解析结果逐笔打出来，排查解析问题 |
@@ -212,6 +234,25 @@ DSH 的 Windows 沙箱禁止开管道，会报 `spawn EPERM`。
 - 多分卷 ZIP、bzip2/LZMA 压缩的 ZIP 不支持。
 - `.xlsx` Excel 账单暂不支持（CSV 和 ZIP 已支持）。
 - 全量数据一次性载入内存。几千笔毫无压力；十万笔以上需要改成分页。
+
+---
+
+## 部署用的令牌（安全提醒）
+
+`deploy-pages.mjs` 需要一个 GitHub classic token，权限**只要 `public_repo`**。
+
+⚠️ **令牌等同于账号的临时钥匙。** 用完之后：
+
+1. 打开 https://github.com/settings/tokens
+2. 找到部署时创建的那个令牌，点 **Delete**（或 Revoke）
+3. 下次要更新代码时，再临时建一个新的
+
+令牌不要写进任何文件、不要提交到仓库、不要贴在聊天记录里长期留存。
+本项目的脚本只从环境变量 `GITHUB_TOKEN` 读取，不会落盘。
+
+关于仓库的公开性：GitHub Pages 免费版只能部署**公开仓库**。
+仓库里只有程序代码（`index.html`、`src/`、`sw.js` 等），
+**没有任何用户数据** —— 账单在用户手机的 IndexedDB 里，从不上传。
 
 ---
 
