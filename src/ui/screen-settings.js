@@ -2,7 +2,7 @@
  * 轻账 · 设置页（「我的」）
  */
 
-import { CATEGORIES, category as getCategory, txType } from '../core/model.js';
+import { CATEGORIES, INCOME_CATEGORIES, category as getCategory, txType } from '../core/model.js';
 import { FREQUENCIES, yearlyRecurringTotal } from '../core/recurring.js';
 import { esc, fmtMoney, fmtDate, fmtFileSize, openSheet, toastOk, toastErr, toastWarn, confirmSheet, promptSheet } from './dom.js';
 import { encryptBackup, decryptBackup, backupFileName, saveTextFile, BACKUP_EXT } from '../core/crypto.js';
@@ -30,8 +30,11 @@ export function renderSettings(root) {
       ${row('➕', '手动记一笔', '不想导入的时候用', 'quick')}
     </div>
 
-    <div class="section-title">分类记忆</div>
+    <div class="section-title">分类</div>
     <div class="card" style="margin:0 16px 16px">
+      ${row('🏷️', '分类管理', customCatCount()
+        ? `${CATEGORIES.length} 个支出分类（${customCatCount()} 个自定义）`
+        : '新建自己的分类，比如「养猫」「实验室」', 'categories')}
       ${row('🧠', '我教过的分类', st.rules.length ? `${st.rules.length} 条规则` : '还没有，改分类时会自动记住', 'rules')}
       ${row('👤', '我的名字 / 昵称', (st.settings.selfNames || []).length ? (st.settings.selfNames || []).join('、') : '用来识别「转给自己」', 'selfnames')}
     </div>
@@ -124,8 +127,12 @@ export function renderSettings(root) {
   });
 }
 
-function offlineExplain(st) {
-  if (st.offlineAvailable === true) return '飞行模式下也能打开和记账';
+/** 自定义分类数量（内置的不算） */
+function customCatCount() {
+  return CATEGORIES.filter((c) => !c.builtin).length + INCOME_CATEGORIES.filter((c) => !c.builtin).length;
+}
+
+function offlineExplain(st) {  if (st.offlineAvailable === true) return '飞行模式下也能打开和记账';
   if (st.offlineAvailable === false) {
     return '当前地址不是 HTTPS（也不是 localhost），浏览器不允许网页应用做离线缓存。用 https 地址打开就能开启。';
   }
