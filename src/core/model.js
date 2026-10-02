@@ -371,6 +371,18 @@ export function makeTx(patch = {}) {
     duplicateOf: patch.duplicateOf || null,
     /** 是否被手工标记为「不计入统计」（例如帮别人代付） */
     excluded: !!patch.excluded,
+    /**
+     * 是否是攒钱记录（钱转进自己的储蓄账户）。
+     *
+     * ⚠️ makeTx 是白名单式构造器：patch 里没列出来的字段会被**静默丢掉**。
+     * 攒钱相关的字段一开始就漏了，结果 recordSavings() 传进来的 savings 标记
+     * 消失得无影无踪 —— 功能在浏览器里也会坏掉，不只是测试问题。
+     * 以后再往交易上加字段，记得同步加到这里。
+     *
+     * 这两个字段只在「确实要标攒钱」时才写，保持旧数据干净。
+     */
+    ...(patch.savings ? { savings: true } : {}),
+    ...(patch.savingsDirection ? { savingsDirection: patch.savingsDirection } : {}),
     createdAt: patch.createdAt || Date.now(),
     updatedAt: patch.updatedAt || Date.now(),
   };
