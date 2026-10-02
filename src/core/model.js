@@ -6,9 +6,18 @@
 
 /* ------------------------------------------------------------------ *
  * 分类
+ *
+ * 这里有两层：
+ *   CATEGORIES      —— 运行时完整清单（内置 + 用户自定义），原地更新
+ *   BUILTIN_CATEGORIES —— 内置的十个，永远不变，是「恢复默认」的依据
+ *
+ * 为什么用「原地更新」而不是每次返回新数组：
+ * 界面和统计里有 8 处直接引用 CATEGORIES，如果改成函数调用，
+ * 就要动一大片代码、引入新 bug 的风险。改成原地 splice 之后，
+ * 所有引用自动看到最新分类，调用点一行都不用改。
  * ------------------------------------------------------------------ */
 
-export const CATEGORIES = [
+export const BUILTIN_CATEGORIES = [
   { id: 'food',      name: '餐饮',   icon: '🍜', color: '#FF9F0A' },
   { id: 'transport', name: '交通',   icon: '🚇', color: '#0A84FF' },
   { id: 'shopping',  name: '购物',   icon: '🛍️', color: '#FF375F' },
@@ -21,11 +30,72 @@ export const CATEGORIES = [
   { id: 'other',     name: '其他',   icon: '📦', color: '#98989D' },
 ];
 
-export const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
-const CATEGORY_BY_ID = new Map(CATEGORIES.map((c) => [c.id, c]));
+/** 运行时清单：内置分类 + 用户自定义分类。内容会被 setCustomCategories 原地替换。 */
+export const CATEGORIES = BUILTIN_CATEGORIES.map((c) => ({ ...c, builtin: true }));
 
+/** 内置 id 集合（判断「是不是自定义」用） */
+const BUILTIN_IDS = new Set(BUILTIN_CATEGORIES.map((c) => c.id));
+
+export const CATEGORY_IDS = CATEGORIES.map((c) => c.id);
+
+/**
+ * 设置用户自定义分类。传空数组就回到只有内置分类的状态。
+ * 会原地更新 CATEGORIES，所以所有已有引用立刻生效。
+ * @param {Array<{id:string,name:string,icon:string,color:string}>} list
+ */
+export function setCustomCategories(list) {
+  const custom = (Array.isArray(list) ? list : [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && typeof c.name === 'string' && c.name.trim())
+    .map((c) => ({
+      id: c.id,
+      name: String(c.name).trim().slice(0, 12),
+      icon: c.icon || '🏷️',
+      color: c.color || '#8E8E93',
+      builtin: false,
+      createdAt: c.createdAt || Date.now(),
+    }));
+
+  // 顺序显式拼出来，不依赖 Array.sort 的稳定性：
+  //   内置分类（不含「其他」） → 自定义分类 → 「其他」
+  // 这样界面上的顺序永远稳定，「其他」永远在最后。
+  const builtinNoOther = BUILTIN_CATEGORIES.filter((c) => c.id !== 'other').map((c) => ({ ...c, builtin: true }));
+  const otherCat = BUILTIN_CATEGORIES.find((c) => c.id === 'other');
+  const next = [...builtinNoOther, ...custom, { ...otherCat, builtin: true }];
+
+  CATEGORIES.length = 0;
+  CATEGORIES.push(...next);
+  return CATEGORIES;
+}
+
+/** 内置 id 集合（副本，防止外部改动） */
+export function builtinCategoryIds() {
+  return new Set(BUILTIN_IDS);
+}
+
+/** 判断一个分类 id 是不是用户自定义的 */
+export function isCustomCategory(id) {
+  return !!id && !BUILTIN_IDS.has(id) && CATEGORIES.some((c) => c.id === id);
+}
+
+/** 分类 id 是否有效（内置或自定义都算） */
+export function isKnownCategory(id) {
+  return CATEGORIES.some((c) => c.id === id) || INCOME_CATEGORIES.some((c) => c.id === id);
+}
+
+/** 生成一个新的自定义分类 id，保证不和内置/已有冲突 */
+export function newCategoryId(name) {
+  const base = 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  return base;
+}
+
+/**
+ * 按 id 取分类。
+ * 注意：找不到时回退到「其他」，所以调用方拿到的永远是有效对象。
+ */
 export function category(id) {
-  return CATEGORY_BY_ID.get(id) || CATEGORY_BY_ID.get('other');
+  for (const c of CATEGORIES) if (c.id === id) return c;
+  for (const c of INCOME_CATEGORIES) if (c.id === id) return c;
+  return CATEGORIES.find((c) => c.id === 'other') || BUILTIN_CATEGORIES[9];
 }
 
 export function categoryName(id) {
@@ -43,9 +113,11 @@ export function txIcon(tx) {
   if (tx.type === 'refund') return '↩️';
   if (tx.type === 'transfer') return '🔄';
   if (tx.type === 'repay') return '💳';
+  // 自定义分类优先（它可能在消费也可能在收入侧）
+  const custom = CATEGORIES.find((c) => c.id === tx.category);
+  if (custom && !custom.builtin) return custom.icon;
   if (tx.type === 'income') {
-    const hit = INCOME_CATEGORIES.find((c) => c.id === tx.category);
-    return hit ? hit.icon : '➕';
+    return category(tx.category).icon || '➕';
   }
   return category(tx.category).icon;
 }
@@ -57,20 +129,62 @@ export function txCategoryLabel(tx) {
   if (tx.type === 'redpacket') return '红包';
   if (tx.type === 'transfer') return '内部转账';
   if (tx.type === 'repay') return '信用卡还款';
+  // 自定义分类优先
+  const custom = CATEGORIES.find((c) => c.id === tx.category);
+  if (custom && !custom.builtin) return custom.name;
   if (tx.type === 'income') {
-    const hit = INCOME_CATEGORIES.find((c) => c.id === tx.category);
-    return hit ? hit.name : '其他收入';
+    return category(tx.category).name || '其他收入';
   }
   return category(tx.category).name;
 }
 
-/** 收入也有分类，但只用于展示，不参与「消费比例」。 */
+/** 收入分类。用户可以往里加自定义项，所以同样是可变数组。 */
 export const INCOME_CATEGORIES = [
   { id: 'salary',   name: '工资',   icon: '💼' },
   { id: 'bonus',    name: '奖金',   icon: '🏆' },
   { id: 'refund',   name: '退款',   icon: '↩️' },
   { id: 'redpacket',name: '红包',   icon: '🧧' },
   { id: 'other_in', name: '其他收入', icon: '➕' },
+];
+
+/** 收入侧的内置清单，用于「恢复默认」 */
+export const BUILTIN_INCOME_CATEGORIES = INCOME_CATEGORIES.map((c) => ({ ...c }));
+
+/**
+ * 设置收入侧的自定义分类（同样原地更新）
+ * @param {Array<{id:string,name:string,icon:string}>} list
+ */
+export function setCustomIncomeCategories(list) {
+  const custom = (Array.isArray(list) ? list : [])
+    .filter((c) => c && typeof c.id === 'string' && c.id && typeof c.name === 'string' && c.name.trim())
+    .map((c) => ({
+      id: c.id,
+      name: String(c.name).trim().slice(0, 12),
+      icon: c.icon || '🏷️',
+      builtin: false,
+      createdAt: c.createdAt || Date.now(),
+    }));
+
+  // 顺序：内置收入分类（不含「其他收入」） → 自定义 → 「其他收入」
+  const builtinNoOther = BUILTIN_INCOME_CATEGORIES.filter((c) => c.id !== 'other_in').map((c) => ({ ...c, builtin: true }));
+  const otherCat = BUILTIN_INCOME_CATEGORIES.find((c) => c.id === 'other_in');
+  const next = [...builtinNoOther, ...custom, { ...otherCat, builtin: true }];
+
+  INCOME_CATEGORIES.length = 0;
+  INCOME_CATEGORIES.push(...next);
+  return INCOME_CATEGORIES;
+}
+
+/** 可选图标 / 颜色，给「新建分类」界面用 */
+export const CATEGORY_ICON_CHOICES = [
+  '🍜', '🍔', '☕', '🧋', '🚇', '🚕', '⛽', '✈️', '🛍️', '👕', '👟', '💄',
+  '🏠', '💡', '📱', '🧹', '🎮', '🎬', '🎵', '🏀', '💊', '🏥', '📚', '✏️',
+  '🎁', '🧧', '🔁', '📦', '🐱', '🐶', '🌱', '🔬', '🎨', '🧪', '💻', '🎧',
+];
+
+export const CATEGORY_COLOR_CHOICES = [
+  '#FF9F0A', '#FF375F', '#FF6482', '#BF5AF2', '#5E5CE6', '#0A84FF',
+  '#64D2FF', '#30D158', '#A2845E', '#8E8E93', '#98989D', '#FF3B30',
 ];
 
 /* ------------------------------------------------------------------ *
