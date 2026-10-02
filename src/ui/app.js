@@ -170,14 +170,18 @@ export function parseLaunchParams(search) {
  *     所以这里监听 controllerchange 自动刷新一次。
  */
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return;
+  if (!('serviceWorker' in navigator)) {
+    store.state.offlineCheck = 'unsupported';
+    return;
+  }
 
   const secure = location.protocol === 'https:' ||
     location.hostname === 'localhost' ||
     location.hostname === '127.0.0.1';
   if (!secure) {
     console.warn('[轻账] 当前不是安全上下文（需要 https 或 localhost），离线缓存不会生效：' + location.origin);
-    store.state.offlineAvailable = false;
+    store.state.offlineCheck = 'insecure';
+    store.notify(true);
     return;
   }
 
@@ -186,7 +190,8 @@ function registerServiceWorker() {
   let reloadingForUpdate = false;
   let lastController = navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    store.state.offlineAvailable = true;
+    store.state.offlineCheck = 'ok';
+    store.notify(true);
     if (!lastController) {
       // 首次安装：现在才有 controller，不需要刷新（页面本来就用的是最新代码）
       lastController = navigator.serviceWorker.controller;
@@ -199,18 +204,37 @@ function registerServiceWorker() {
   });
 
   const doRegister = () => {
+    // 超时兜底：正常情况下注册几秒内就完成。
+    // 如果卡住不动（网络问题、浏览器限制、隐私模式等），
+    // 必须给用户一个明确的结论，不能永远停在「检查中」——
+    // 这正是用户实际遇到的问题：界面一直显示「正在检查」，什么都做不了。
+    const timeout = setTimeout(() => {
+      if (store.state.offlineCheck === 'pending') {
+        store.state.offlineCheck = 'failed';
+        store.state.offlineError = '注册超时（超过 10 秒没有响应）';
+        console.warn('[轻账] Service Worker 注册超时');
+        store.notify(true);
+      }
+    }, 10000);
+
     navigator.serviceWorker.register('./sw.js').then(
       (reg) => {
-        store.state.offlineAvailable = true;
+        clearTimeout(timeout);
+        store.state.offlineCheck = 'ok';
         // 存起来，「检查更新」按钮要用
         store.state.swRegistration = reg;
         console.log('[轻账] 离线缓存已就绪，作用域 ' + reg.scope);
         // 主动检查更新：手机上 App 常常长期不关，光靠浏览器自己轮询可能等很久
         reg.update().catch(() => {});
+        // 状态变了要通知界面重绘，否则「正在检查…」会一直停在那里
+        store.notify(true);
       },
       (err) => {
-        store.state.offlineAvailable = false;
-        console.warn('[轻账] 离线缓存注册失败：', err && err.message);
+        clearTimeout(timeout);
+        store.state.offlineCheck = 'failed';
+        store.state.offlineError = err && err.message ? err.message : String(err);
+        console.warn('[轻账] 离线缓存注册失败：', store.state.offlineError);
+        store.notify(true);
       },
     );
   };
@@ -228,6 +252,11 @@ function registerServiceWorker() {
  * 版本号保存在 sw.js 里（单一来源）——它决定缓存名，改它才会触发更新。
  * 这里直接 fetch 那个文件把版本号读出来，避免在两个地方各写一份、
  * 时间一长就对不上。读不到就显示「未知」，不影响使用。
+ *
+ * ⚠️ 必须 notify()！
+ * 这两件事（注册 SW、读版本号）都是**异步**完成的，而界面在它们完成之前
+ * 就已经画好了。如果只改 state 不通知重绘，界面上的文字会永远停在
+ * 「正在检查…」「读取中…」—— 用户看到的就是「一直在检查，检查不了版本」。
  */
 async function loadAppVersion() {
   try {
@@ -239,6 +268,7 @@ async function loadAppVersion() {
   } catch (e) {
     store.state.appVersion = '未知';
   }
+  store.notify(true);
 }
 
 /**
@@ -250,23 +280,42 @@ async function loadAppVersion() {
  * 它接管后 controllerchange 会触发一次自动刷新，新版本就生效了。
  */
 async function checkForUpdate() {
-  const reg = store.state.swRegistration;
-  if (!reg) {
-    toastWarn('离线缓存还没准备好，稍后再试');
-    return;
-  }
   toast('正在检查更新…');
+
+  let reg = store.state.swRegistration;
+
+  // 还没注册成功过（或之前失败了）→ 现在就重试一次。
+  // 用户点这个按钮时往往正是因为「离线可用」显示失败/检查中，
+  // 只报一句「还没准备好」等于什么都没做。
+  if (!reg) {
+    try {
+      reg = await navigator.serviceWorker.register('./sw.js');
+      store.state.swRegistration = reg;
+      store.state.offlineCheck = 'ok';
+      store.state.offlineError = '';
+      store.notify(true);
+      toastOk('离线缓存已就绪');
+      return;
+    } catch (e) {
+      store.state.offlineCheck = 'failed';
+      store.state.offlineError = e && e.message ? e.message : String(e);
+      store.notify(true);
+      toastErr('离线缓存还是注册不上：' + store.state.offlineError, 4000);
+      return;
+    }
+  }
+
   try {
     await reg.update();
     // 给浏览器一点时间完成安装
     await new Promise((r) => setTimeout(r, 1200));
     if (reg.installing || reg.waiting) {
       toastOk('发现新版本，正在刷新…');
-      // 让新的 SW 立刻接管（sw.js 里 install 时会 skipWaiting）
       if (reg.waiting) reg.waiting.postMessage('skip-waiting');
       // controllerchange 会触发刷新；万一没触发，这里兜底
       setTimeout(() => location.reload(), 1500);
     } else {
+      await loadAppVersion();
       const v = store.state.appVersion || '当前版本';
       toastOk(`已是最新版本（${v}）`);
     }
