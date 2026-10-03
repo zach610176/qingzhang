@@ -124,7 +124,14 @@
 -->
 <script>
 (function () {
-  var BOOT_TIMEOUT = 6000;
+  /*
+    超时时间。
+    以前是 6 秒 —— 太急了：线上（GitHub Pages + 慢网络）第一次安装缓存
+    实测要 16 秒左右，于是正常启动也会被误判成「卡住」，
+    平白弹出一个「轻账没能打开」把用户吓一跳。
+    现在放宽到 15 秒；真卡住的话多等几秒也能接受，总比误报好。
+  */
+  var BOOT_TIMEOUT = 15000;
   var settled = false;
 
   function showRecovery(reason) {
@@ -136,20 +143,22 @@
     if (!fatal) return;
     fatal.hidden = false;
     fatal.innerHTML =
-      '<div style="font-size:17px;font-weight:600;color:var(--label);margin-bottom:8px">轻账没能打开</div>'
-      + '<div style="font-size:14px;color:var(--label-2);line-height:1.6;margin-bottom:14px">'
+      '<div class="fatal-title">轻账没能打开</div>'
+      + '<div class="fatal-msg">'
       + (reason || '可能是本地缓存的文件出了问题。')
-      + '<br>点下面的按钮重新加载，多半就能好。</div>'
-      + '<button id="qz-retry" style="width:100%;min-height:46px;border-radius:12px;background:var(--blue);color:#fff;font-size:16px;font-weight:600;border:0">重新加载</button>'
-      + '<div style="font-size:12px;color:var(--label-2);line-height:1.6;margin-top:12px">'
+      + '<br>点下面的按钮重新获取文件，多半就能好。</div>'
+      + '<button type="button" id="qz-retry" class="fatal-retry">重新加载</button>'
+      + '<div class="fatal-hint">'
       + '如果点了还是打不开：把轻账从后台完全关掉（底部上滑停住 → 卡片上划掉），再点桌面图标重开一次。'
       + '<br><br>注意：<b>不要</b>在 Safari 设置里「清除网站数据」——那会把你的记账数据一起删掉。</div>';
 
     var btn = document.getElementById('qz-retry');
     if (btn) {
       btn.addEventListener('click', function () {
-        // 带一个每次都不一样的参数：Service Worker 的缓存键里包含查询串，
-        // 所以这样能绕开缓存、直接从网络重新取一遍所有文件。
+        // 带一个每次都不同的参数，并留一个标记告诉应用
+        // 「这次启动要先把缓存整体刷一遍」（见 src/ui/app.js）。
+        // 不带这个标记的话，静态资源还是从缓存拿，可能还是那个坏文件。
+        try { sessionStorage.setItem('qz-force-network', '1'); } catch (e) { /* 忽略 */ }
         var url = location.origin + location.pathname + '?r=' + Date.now();
         location.replace(url);
       });
@@ -159,12 +168,11 @@
   // 应用启动成功后会设这个标记
   window.__qzBooted = false;
 
-  // 6 秒还没起来 → 判定为卡住
   setTimeout(function () {
-    if (!window.__qzBooted) showRecovery('加载超时了（等了 6 秒）。');
+    if (!window.__qzBooted) showRecovery('加载超时了（等了 ' + (BOOT_TIMEOUT / 1000) + ' 秒）。');
   }, BOOT_TIMEOUT);
 
-  // module 脚本加载失败（最常见的就是缓存里缺文件）→ 立刻提示，不用等 6 秒
+  // module 脚本加载失败（最常见的就是缓存里缺文件）→ 立刻提示，不用等超时
   window.addEventListener('error', function (e) {
     var t = e && e.target;
     if (t && t.tagName === 'SCRIPT') {
@@ -174,7 +182,7 @@
 
   // 兜底：任何未捕获错误
   window.addEventListener('unhandledrejection', function () {
-    setTimeout(function () { if (!window.__qzBooted) showRecovery('启动时出错了。'); }, 1500);
+    setTimeout(function () { if (!window.__qzBooted) showRecovery('启动时出错了。'); }, 2000);
   });
 })();
 </script>
