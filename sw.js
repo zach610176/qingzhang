@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.5.1';
+const VERSION = 'v1.6.0';
 const CACHE = 'qingzhang-' + VERSION;
 
 /**
@@ -144,6 +144,15 @@ const INSTALL_RETRY = 2;
 const INSTALL_BATCH = 4;
 
 /**
+ * 页面导航时最多等网络多久（毫秒）。
+ *
+ * 超过这个时间就用本地缓存立刻显示，网络那份在后台继续下、下好了写进缓存。
+ * 取值考虑：家里宽带上通常 200-600ms 就能拿到；2 秒足够覆盖正常波动，
+ * 又短到用户不会觉得「卡住了」。详见 fetch 里导航分支的注释。
+ */
+const NAV_TIMEOUT = 2000;
+
+/**
  * 下载一个文件并**立刻读完它的内容**，然后写进缓存。
  *
  * ⚠️ 这里有两个必须遵守的约束，都是实测踩出来的：
@@ -248,29 +257,53 @@ self.addEventListener('fetch', (ev) => {
     return;
   }
 
-  // 页面导航：先尝试网络，失败回退缓存（保证能拿到最新版，离线也能开）
+  // 页面导航：「网络优先，但**最多等 NAV_TIMEOUT**，超时就用缓存」。
+  //
+  // ⚠️ 这里以前是无上限地等网络。后果实测过：
+  // 只要那一刻网抖一下（家里到 GitHub 中间任何一跳卡住），
+  // 用户就要干等 15 秒然后看到「轻账没能打开」——
+  // 而其实上一次成功打开时，整份代码已经存在本地缓存里了，本来可以秒开。
+  //
+  // 现在：2 秒内网络给了就用最新的；没给就用缓存立刻显示。
+  // 网络那份照常在后台下好写进缓存，下次打开就是新的。
+  // 这让「能打开」不再依赖「那一瞬间网通不通」。
   if (req.mode === 'navigate') {
     ev.respondWith((async () => {
       const cache = await caches.open(CACHE);
-      try {
-        const fresh = await fetch(req);
-        if (fresh && fresh.ok) {
+
+      const readCached = async () =>
+        (await cache.match(new URL('./index.html', self.location.href))) ||
+        (await cache.match('./index.html')) ||
+        (await cache.match('./')) ||
+        (await cache.match(new URL('./', self.location.href)));
+
+      // 后台把最新的页面存起来（不管前台最终用哪份）
+      const netPromise = fetch(req).then((res) => {
+        if (res && res.ok) {
           // 用绝对 URL 归一化，保证 '/', '/index.html', './' 命中同一个缓存项
-          cache.put(new Request(new URL('./index.html', self.location.href)), fresh.clone());
+          cache.put(new Request(new URL('./index.html', self.location.href)), res.clone());
         }
-        return fresh;
-      } catch (e) {
-        const cached =
-          await cache.match(new URL('./index.html', self.location.href)) ||
-          await cache.match('./index.html') ||
-          await cache.match('./') ||
-          await cache.match(new URL('./', self.location.href));
-        if (cached) return cached;
-        return new Response('离线，且本地缓存里没有页面。请联网打开一次完成缓存。', {
-          status: 503,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        });
+        return res;
+      }).catch(() => null);
+
+      // 先看缓存里有没有；有就给它一个「最多等 2 秒」的机会去拿新版
+      const cached = await readCached();
+      if (cached) {
+        const fresh = await Promise.race([
+          netPromise,
+          new Promise((r) => setTimeout(() => r(null), NAV_TIMEOUT)),
+        ]);
+        // 网络在时限内给了就用新的，否则立刻用缓存（并让后台继续下完）
+        return fresh || cached;
       }
+
+      // 缓存里没有（真正的第一次打开）→ 只能等网络
+      const fresh = await netPromise;
+      if (fresh) return fresh;
+      return new Response('离线，且本地缓存里没有页面。请联网打开一次完成缓存。', {
+        status: 503,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      });
     })());
     return;
   }
