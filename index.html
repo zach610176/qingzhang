@@ -188,8 +188,17 @@
 </script>
 
 <script type="module">
-  import { boot } from './src/ui/app.js';
-  boot().then(function () {
+  /*
+    启动入口。
+    优先用合并后的单文件 src/bundle.js —— 它把 33 个模块合成 1 个请求，
+    冷启动快很多（实测线上第一次打开要 4 秒，主要是 33 个文件排队下载）。
+    bundle.js 由 tools/build-bundle.mjs 生成；本地开发时如果没有这个文件，
+    就自动退回按模块加载（和以前一样）。
+  */
+  let mod = null;
+  try { mod = await import('./src/bundle.js'); } catch (e) { /* 没有合并文件 */ }
+  if (!mod) mod = await import('./src/ui/app.js');
+  mod.boot().then(function () {
     window.__qzBooted = true;
   }).catch(function (err) {
     window.__qzBooted = true; // 已经显示出错了，别再触发看门狗
