@@ -168,13 +168,21 @@ export function demoTxs() {
   }
 
   // 几笔退款
+  //
+  // ⚠️ 这里曾经写成「当月第 3 / 9 / 15 天」，再加上 `if (ts > now) continue`，
+  // 于是**每月头几天**跑的时候，后面那几笔退款因为「还没到那个日期」被跳过 ——
+  // 演示数据变成了半截，截图和自动化检查都会跟着对不上（踩过：10 月 3 日
+  // 只有 1 笔退款，而断言期望 3 笔）。
+  //
+  // 现在把退款放到**已经过去的月份**里，任意日期跑都完整。
+  // 规则：演示数据可以依赖「月份」，但不要依赖「这个月的第几天」。
   const refundMerchants = [['京东商城', 189], ['淘宝', 68.5], ['优衣库', 199]];
   for (let i = 0; i < refundMerchants.length; i++) {
     const [merchant, yuan] = refundMerchants[i];
-    const ts = new Date(now.getFullYear(), now.getMonth(), 3 + i * 6, 14, 20, 0).getTime();
-    if (ts > now.getTime()) continue;
+    // 分别放在 上个月 / 上上个月 / 上上上个月 的第 20 天，一定是过去
+    const d = new Date(now.getFullYear(), now.getMonth() - (i + 1), 20, 14, 20, 0);
     const tx = makeTx({
-      ts, amountCents: Math.round(yuan * 100), type: 'refund', category: 'refund',
+      ts: d.getTime(), amountCents: Math.round(yuan * 100), type: 'refund', category: 'refund',
       merchant, description: '退款', source: 'alipay', batchId,
     });
     tx.fp = fingerprint(tx);
