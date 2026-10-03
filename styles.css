@@ -122,10 +122,43 @@ a { color: var(--blue); }
 .boot-bar i { display: block; height: 100%; width: 40%; border-radius: 2px; background: var(--blue); animation: slide 1.1s ease-in-out infinite; }
 @keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 
+/* ---------- 出错 / 打不开时的自救界面 ----------
+ *
+ * ⚠️ 这里踩过一个很坑的问题：原来 .fatal 只是一个「margin + padding」的
+ * 小红字条，既没有撑满屏幕、也没有背景色。
+ * 而启动闪屏 .boot 是 position:fixed + inset:0 盖住整页的。
+ * 于是「闪屏被隐藏 → .fatal 显示」之后，用户看到的是：
+ *   一片空白（只有页面顶部一行小红字，得往下滑才看得到，手机上几乎注意不到）
+ * 用户的原话是「变成白屏了，依旧进不去」—— 提示其实在，只是根本看不见。
+ *
+ * 现在把它做成和闪屏一样的全屏面板：铺满、居中、有背景色，
+ * 保证「打不开」的时候用户一定能看到发生了什么、以及该点哪里。
+ */
 .fatal {
-  margin: 24px; padding: 16px; border-radius: 12px;
-  background: var(--card); color: var(--red); font-size: 15px; white-space: pre-wrap;
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 28px;
+  background: var(--bg);
+  color: var(--label);
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
+.fatal[hidden] { display: none !important; }
+.fatal > * { max-width: 420px; width: 100%; }
+
+/* 自救界面里的几块内容（由 index.html 的看门狗生成） */
+.fatal-title { font-size: 19px; font-weight: 600; margin-bottom: 10px; text-align: center; }
+.fatal-msg { font-size: 14px; color: var(--label-2); margin-bottom: 16px; text-align: center; }
+.fatal-retry {
+  min-height: 48px; border-radius: 12px;
+  background: var(--blue); color: #fff;
+  font-size: 16px; font-weight: 600;
+  width: 100%;
+}
+.fatal-hint { font-size: 12.5px; color: var(--label-2); margin-top: 18px; line-height: 1.7; }
 
 /* ---------- 应用布局 ---------- */
 .app {
