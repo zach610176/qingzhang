@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.5.0';
 const CACHE = 'qingzhang-' + VERSION;
 
 /**
@@ -29,6 +29,12 @@ const CACHE = 'qingzhang-' + VERSION;
  * 这几个都是启动链路上的第一环：html → app.js → store/home 模块。
  */
 const CRITICAL = ['./index.html', './src/ui/app.js', './src/ui/store.js', './src/ui/screen-home.js'];
+/**
+ * 合并后的单文件（由 tools/build-bundle.mjs 生成）。
+ * 页面优先用它 —— 33 个模块合成 1 个请求，冷启动快很多。
+ * 它是「有就用、没有就算了」：本地开发没跑合并脚本时页面会退回按模块加载。
+ */
+const BUNDLE = './src/bundle.js';
 
 /**
  * 把任意形式的资源地址归一化成 './xxx' 这种相对形式。
@@ -64,6 +70,10 @@ const ASSETS = [
   // 取决于 Cache API 把 './' 和 './index.html' 视为同一资源的实现细节，
   // 显式列出来最稳妥（tools/check-sw-assets.mjs 会强制要求这一项）。
   './index.html',
+  // 合并后的单文件排在最前：页面优先用它，一个请求拿到全部代码。
+  // 下面的模块文件也照常缓存 —— 它们是 bundle 缺失时的退路
+  // （本地开发没跑合并脚本时，页面会按模块加载）。
+  './src/bundle.js',
   './styles.css',
   './sw.js',
   './manifest.webmanifest',
