@@ -109,9 +109,82 @@
 <noscript><div class="fatal">轻账需要 JavaScript 才能运行，请在 Safari 里打开。</div></noscript>
 <div id="fatal" class="fatal" hidden></div>
 
+<!--
+  看门狗：专门对付「打不开」这种情况。
+
+  为什么需要它：启动脚本是 `import { boot } from './src/ui/app.js'`。
+  如果那一行 import **本身**失败（离线缓存里少了一个文件、或者存到了坏副本），
+  整个 module 脚本会直接失败 —— 后面的 .catch() 根本不会被调用，
+  用户看到的就是**一片空白，没有任何提示**，只能干瞪眼。
+
+  这里用一个普通的（非 module）脚本盯着：
+    · 6 秒内应用没启动起来 → 显示明确的错误 + 一个「重新加载」按钮
+    · 「重新加载」会带一个随机参数，绕过 Service Worker 的缓存重新取文件
+  普通脚本不会因为 module 加载失败而受影响，所以它一定能执行到。
+-->
+<script>
+(function () {
+  var BOOT_TIMEOUT = 6000;
+  var settled = false;
+
+  function showRecovery(reason) {
+    if (settled) return;
+    settled = true;
+    var boot = document.getElementById('boot');
+    var fatal = document.getElementById('fatal');
+    if (boot) boot.hidden = true;
+    if (!fatal) return;
+    fatal.hidden = false;
+    fatal.innerHTML =
+      '<div style="font-size:17px;font-weight:600;color:var(--label);margin-bottom:8px">轻账没能打开</div>'
+      + '<div style="font-size:14px;color:var(--label-2);line-height:1.6;margin-bottom:14px">'
+      + (reason || '可能是本地缓存的文件出了问题。')
+      + '<br>点下面的按钮重新加载，多半就能好。</div>'
+      + '<button id="qz-retry" style="width:100%;min-height:46px;border-radius:12px;background:var(--blue);color:#fff;font-size:16px;font-weight:600;border:0">重新加载</button>'
+      + '<div style="font-size:12px;color:var(--label-2);line-height:1.6;margin-top:12px">'
+      + '如果点了还是打不开：把轻账从后台完全关掉（底部上滑停住 → 卡片上划掉），再点桌面图标重开一次。'
+      + '<br><br>注意：<b>不要</b>在 Safari 设置里「清除网站数据」——那会把你的记账数据一起删掉。</div>';
+
+    var btn = document.getElementById('qz-retry');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        // 带一个每次都不一样的参数：Service Worker 的缓存键里包含查询串，
+        // 所以这样能绕开缓存、直接从网络重新取一遍所有文件。
+        var url = location.origin + location.pathname + '?r=' + Date.now();
+        location.replace(url);
+      });
+    }
+  }
+
+  // 应用启动成功后会设这个标记
+  window.__qzBooted = false;
+
+  // 6 秒还没起来 → 判定为卡住
+  setTimeout(function () {
+    if (!window.__qzBooted) showRecovery('加载超时了（等了 6 秒）。');
+  }, BOOT_TIMEOUT);
+
+  // module 脚本加载失败（最常见的就是缓存里缺文件）→ 立刻提示，不用等 6 秒
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    if (t && t.tagName === 'SCRIPT') {
+      showRecovery('启动文件没加载成功。');
+    }
+  }, true);
+
+  // 兜底：任何未捕获错误
+  window.addEventListener('unhandledrejection', function () {
+    setTimeout(function () { if (!window.__qzBooted) showRecovery('启动时出错了。'); }, 1500);
+  });
+})();
+</script>
+
 <script type="module">
   import { boot } from './src/ui/app.js';
-  boot().catch((err) => {
+  boot().then(function () {
+    window.__qzBooted = true;
+  }).catch(function (err) {
+    window.__qzBooted = true; // 已经显示出错了，别再触发看门狗
     const el = document.getElementById('fatal');
     el.hidden = false;
     el.textContent = '轻账启动失败：' + (err && err.message ? err.message : String(err));
