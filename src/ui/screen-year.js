@@ -39,6 +39,17 @@ export function yearStats(txs, year) {
   const income = totalIncome(active);
 
   // 逐月
+  //
+  // ⚠️ 这里曾经写成 mn = Math.max(0, 该月毛支出 − 该月退款)，是**错的**。
+  // 年总额用的是 netSpend(全年) = max(0, 全年毛 − 全年退款)，
+  // 而逐月各自夹到 0 会把「该月没有支出、只有退款」的那部分退款**吃掉**，
+  // 于是「12 个月之和」比「年消费」多出来一截，用户对不上账。
+  // （实测：7 月毛 0、退款 199 → 逐月净 0，那 199 在年总额里扣了却不在月里，
+  //   月之和比年总额多 199。）
+  //
+  // 现在逐月**不夹零**，允许为负（某月只退款、没消费时就是负的），
+  // 这样「逐月之和」天然等于「全年毛 − 全年退款」，账目自洽。
+  // 负值在界面上要如实显示成「多退 ¥X」，不能装作没有。
   const months = [];
   for (let m = 1; m <= 12; m++) {
     const key = `${year}-${String(m).padStart(2, '0')}`;
@@ -46,7 +57,7 @@ export function yearStats(txs, year) {
     const ml = active.filter((t) => t.ts >= start && t.ts < end);
     const me = totalExpense(ml);
     const mr = totalRefund(ml);
-    const mn = Math.max(0, me - mr);
+    const mn = me - mr;              // 不夹零，可能为负
     months.push({
       month: m,
       key,
@@ -54,12 +65,13 @@ export function yearStats(txs, year) {
       expense: me,
       refund: mr,
       net: mn,
+      negative: mn < 0,              // 该月退款多于消费
       income: totalIncome(ml),
       count: ml.length,
     });
   }
-  const maxMonthNet = Math.max(1, ...months.map((m) => m.net));
-  for (const m of months) m.percent = (m.net / maxMonthNet) * 100;
+  const maxMonthNet = Math.max(1, ...months.map((m) => Math.max(0, m.net)));
+  for (const m of months) m.percent = (Math.max(0, m.net) / maxMonthNet) * 100;
 
   // 有消费的月份（用于算月均）
   const monthsWithData = months.filter((m) => m.count > 0);
@@ -232,12 +244,23 @@ export function renderYearReport(root) {
     <div class="card" style="margin:0 16px 16px">
       <div class="chart-box">${monthBarSvg(s.months)}</div>
       <div class="month-bars">
-        ${s.months.map((m) => `
-          <div class="mb-row">
+        ${s.months.map((m) => {
+          // 负值（该月只有退款、没有消费）要如实写出来，不能显示成「—」装作没事
+          const amt = m.net > 0
+            ? esc(fmtMoney(m.net, { decimals: 0 }))
+            : m.net < 0
+              ? `<span class="green">多退 ${esc(fmtMoney(-m.net, { decimals: 0 }))}</span>`
+              : '<span class="muted">—</span>';
+          const fillColor = m.net < 0 ? 'var(--green)'
+            : m.net === 0 ? 'var(--fill)'
+              : (m.month === (s.topMonth ? s.topMonth.month : -1) ? 'var(--red)' : 'var(--blue)');
+          return `
+          <div class="mb-row" data-month="${m.month}" data-net="${m.net}">
             <span class="mb-label">${m.month}月</span>
-            <span class="mb-track"><i class="mb-fill" style="width:${m.percent}%;background:${m.net === 0 ? 'var(--fill)' : (m.month === (s.topMonth ? s.topMonth.month : -1) ? 'var(--red)' : 'var(--blue)')}"></i></span>
-            <span class="mb-amt">${m.net ? esc(fmtMoney(m.net, { decimals: 0 })) : '<span class="muted">—</span>'}</span>
-          </div>`).join('')}
+            <span class="mb-track"><i class="mb-fill" style="width:${m.percent}%;background:${fillColor}"></i></span>
+            <span class="mb-amt">${amt}</span>
+          </div>`;
+        }).join('')}
       </div>
     </div>
 
@@ -377,22 +400,33 @@ function renderIncome(s) {
     </div>`;
 }
 
-/** 逐月柱状图（SVG，宽度自适应） */
+/**
+ * 逐月柱状图（SVG，宽度自适应）
+ *
+ * 注意负值（某月只有退款、没有消费）：画成一条贴着基线的灰色矮条，
+ * 并且提示文字写「多退 ¥X」而不是「没有消费」——
+ * 那个月账上确实有变动，藏着不说才是骗人。
+ */
 function monthBarSvg(months) {
   const w = 320, h = 90, padB = 16, padT = 8;
   const innerH = h - padT - padB;
   const bw = w / 12;
-  const max = Math.max(1, ...months.map((m) => m.net));
+  const max = Math.max(1, ...months.map((m) => Math.max(0, m.net)));
 
   let bars = '';
   months.forEach((m, i) => {
-    const bh = m.net > 0 ? Math.max(2, (m.net / max) * innerH) : 0;
+    const positive = m.net > 0;
+    const negative = m.net < 0;
+    const bh = positive ? Math.max(2, (m.net / max) * innerH) : 0;
     const x = i * bw + bw * 0.18;
     const y = padT + innerH - bh;
-    const isTop = m.net === max && m.net > 0;
-    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.64).toFixed(1)}" height="${Math.max(bh, 0.5).toFixed(1)}" rx="2.5"
-        fill="${isTop ? 'var(--red)' : 'var(--blue)'}" opacity="${m.net > 0 ? 1 : 0.15}">
-        <title>${m.month}月 ${m.net ? fmtMoney(m.net) : '没有消费'}</title></rect>`;
+    const isTop = positive && m.net === max;
+    const label = positive ? fmtMoney(m.net)
+      : negative ? ('多退 ' + fmtMoney(-m.net))
+        : '没有消费';
+    bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw * 0.64).toFixed(1)}" height="${Math.max(bh, negative ? 2 : 0.5).toFixed(1)}" rx="2.5"
+        fill="${isTop ? 'var(--red)' : negative ? 'var(--green)' : 'var(--blue)'}" opacity="${positive || negative ? 1 : 0.15}">
+        <title>${m.month}月 ${label}</title></rect>`;
     if (i % 2 === 0 || i === 11) {
       bars += `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${h - 4}" text-anchor="middle" font-size="8.5" fill="var(--label-2)">${m.month}</text>`;
     }
