@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.5.0';
+const VERSION = 'v1.5.1';
 const CACHE = 'qingzhang-' + VERSION;
 
 /**
