@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.3.1';
 const CACHE = 'qingzhang-' + VERSION;
 
 /**
@@ -131,7 +131,7 @@ const ASSETS = [
  */
 const INSTALL_RETRY = 2;
 /** 每批下载的文件数。见下面 cacheAsset 的注释：不能一次开太多。 */
-const INSTALL_BATCH = 6;
+const INSTALL_BATCH = 4;
 
 /**
  * 下载一个文件并**立刻读完它的内容**，然后写进缓存。
