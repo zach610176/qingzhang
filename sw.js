@@ -20,8 +20,40 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.2.4';
+const VERSION = 'v1.3.0';
 const CACHE = 'qingzhang-' + VERSION;
+
+/**
+ * 少了这些文件，App **一定**打不开（白屏）。
+ * 安装时必须逐个确认它们真的存进缓存了，缺一个就放弃这次安装。
+ * 这几个都是启动链路上的第一环：html → app.js → store/home 模块。
+ */
+const CRITICAL = ['./index.html', './src/ui/app.js', './src/ui/store.js', './src/ui/screen-home.js'];
+
+/**
+ * 把任意形式的资源地址归一化成 './xxx' 这种相对形式。
+ *
+ * ⚠️ 这里踩过两个坑，都值得记下来：
+ *  1. 不能把部署路径写死（曾经写成 replace(/^.*\/qingzhang\//, '')）。
+ *     那样一旦换部署位置（本地测试服务根目录、换个仓库名）就全部失配，
+ *     完整性校验会永远认为「缓存不完整」，于是**永远不删旧缓存**。
+ *     改成用 self.location 推导，部署到哪都对。
+ *  2. Cache API 存的是**完整 URL**（相对路径会被解析掉），
+ *     而 CRITICAL 里写的是 './xxx'。两边必须先归一化再比。
+ */
+function normalizeAsset(u) {
+  const raw = typeof u === 'string' ? u : (u && u.url) || String(u);
+  let pathname;
+  try {
+    pathname = new URL(raw, self.location.href).pathname;
+  } catch (e) {
+    pathname = raw;
+  }
+  // 去掉 Service Worker 所在的目录前缀，得到仓库内的相对路径
+  const base = new URL('./', self.location.href).pathname;   // 例如 '/qingzhang/'
+  if (pathname.startsWith(base)) pathname = pathname.slice(base.length);
+  return './' + pathname.replace(/^\/+/, '');
+}
 
 // 相对路径，部署到子目录也能用
 // 注意：这份清单要和 src/ 下真实存在的文件保持一致。
@@ -71,24 +103,121 @@ const ASSETS = [
   './src/ui/category-sheets.js',
 ];
 
+/**
+ * 安装：把资源存进新缓存。
+ *
+ * ⚠️ 这里以前犯过一个严重错误，是「App 反复打不开（纯白屏）」的直接原因：
+ *
+ *   await Promise.all(ASSETS.map(async (url) => {
+ *     try { ...cache.put(url, res) } catch (e) {  // 忽略单个失败
+ *     }
+ *   }));
+ *   self.skipWaiting();
+ *
+ * 问题在于「忽略单个失败」+「无条件 skipWaiting」这两个凑在一起：
+ *   1. 某个文件下载失败（网络抖动、校园网 400-800ms 延迟、GitHub 抽风）
+ *      → 缓存里**缺文件**
+ *   2. 但安装照样「成功」，照样立刻接管
+ *   3. activate 把**旧的、完好的**缓存删掉
+ *   → 于是残缺的新缓存顶掉了好用的旧缓存，App 白屏
+ *   → 下一次安装碰巧成功，又好了 —— 这就是「时好时坏」的来源
+ *
+ * 现在的做法：
+ *   · 先全部下载到内存（失败就重试一次）
+ *   · 再检查关键文件一个都不少
+ *   · 全部齐了才写入缓存 + 接管
+ *   · 只要有一个关键文件没拿到，就**放弃这次安装**，
+ *     旧版本继续用 —— 用户宁可看到旧版，也不要白屏。
+ */
+const INSTALL_RETRY = 2;
+/** 每批下载的文件数。见下面 cacheAsset 的注释：不能一次开太多。 */
+const INSTALL_BATCH = 6;
+
+/**
+ * 下载一个文件并**立刻读完它的内容**，然后写进缓存。
+ *
+ * ⚠️ 这里有两个必须遵守的约束，都是实测踩出来的：
+ *
+ *  1. **不能同时持有大量「没读过 body」的 response。**
+ *     之前的写法是「先把 38 个文件全 fetch 下来存进 Map，再统一 cache.put」。
+ *     结果在真实浏览器里 **只有前 3 个 fetch 返回，其余 35 个永远挂着** ——
+ *     安装永久停在 installing、缓存是空的、App 白屏。
+ *     同样的代码在页面里跑只要 18ms，所以这是 Service Worker 特有的限制：
+ *     它对「未消费的响应体」有并发上限，持有太多会互相堵死。
+ *     改成取到一个就立刻 arrayBuffer() 读完，读完的 response 不再占额度。
+ *
+ *  2. **要控制并发数。** 38 个并发在手机上太激进，按 INSTALL_BATCH 分批，
+ *     稳一点；总耗时依然很短（本地实测几十毫秒）。
+ */
+async function cacheAsset(cache, url, critical, missing) {
+  let lastErr = null;
+  for (let i = 0; i < INSTALL_RETRY; i++) {
+    try {
+      const res = await fetch(new Request(url, { cache: 'reload' }));
+      if (!res || !res.ok) {
+        lastErr = new Error('HTTP ' + (res ? res.status : '?'));
+      } else {
+        // 立刻读干净，避免占用「未消费响应体」的并发额度
+        const buf = await res.arrayBuffer();
+        const type = res.headers.get('Content-Type') || 'application/octet-stream';
+        await cache.put(url, new Response(buf, {
+          status: 200,
+          statusText: 'OK',
+          headers: { 'Content-Type': type },
+        }));
+        return true;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    // 失败后等一下再重试，给网络一点恢复时间
+    await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+  }
+  if (critical) missing.push(url + '（' + (lastErr && lastErr.message) + '）');
+  return false;
+}
+
 self.addEventListener('install', (ev) => {
   ev.waitUntil((async () => {
+    const missing = [];
     const cache = await caches.open(CACHE);
-    // 逐个添加，单个失败不影响整体（不同版本可能多/少文件）
-    await Promise.all(ASSETS.map(async (url) => {
-      try {
-        const res = await fetch(new Request(url, { cache: 'reload' }));
-        if (res && res.ok) await cache.put(url, res);
-      } catch (e) {
-        // 忽略单个文件失败
-      }
-    }));
+
+    // 分批下载 + 写入。关键文件失败记进 missing，非关键文件失败就跳过。
+    for (let i = 0; i < ASSETS.length; i += INSTALL_BATCH) {
+      const batch = ASSETS.slice(i, i + INSTALL_BATCH);
+      await Promise.all(batch.map((url) =>
+        cacheAsset(cache, url, CRITICAL.indexOf(url) >= 0, missing)));
+    }
+
+    // 关键文件缺任何一个 → 这次安装作废。
+    // 抛错会让 install 失败，新的 Service Worker 不会激活、也就走不到
+    // activate 去删旧缓存 —— 旧的（可用的）版本继续服务用户。
+    // 用户宁可看到旧版，也不要白屏。
+    if (missing.length) {
+      throw new Error('关键文件没拿到，放弃本次更新：' + missing.join('; '));
+    }
+
     self.skipWaiting();
   })());
 });
 
 self.addEventListener('activate', (ev) => {
   ev.waitUntil((async () => {
+    // 删旧缓存之前先确认自己这份是完整的。
+    // 正常情况 install 已经把关了（缺关键文件就不会走到这里），
+    // 但这里再查一次 —— 删掉别人的完好缓存是不可逆的操作，值得多一道保险。
+    const cache = await caches.open(CACHE);
+    const keys = await cache.keys();
+    const have = new Set(keys.map((k) => normalizeAsset(k)));
+    const missingCritical = CRITICAL.filter((c) => !have.has(normalizeAsset(c)));
+
+    if (missingCritical.length) {
+      // 自己都不完整，就别动别人的缓存了
+      console.warn('[轻账] 新缓存不完整，保留旧缓存不删：' + missingCritical.join(', '));
+      await self.clients.claim();
+      return;
+    }
+
     const names = await caches.keys();
     await Promise.all(names.map((n) => (n === CACHE ? null : caches.delete(n))));
     await self.clients.claim();
