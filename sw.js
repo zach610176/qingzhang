@@ -20,7 +20,7 @@
  *   次版本：v1.1.0 → v1.2.0   加功能
  *   主版本：v1.1.0 → v2.0.0   改数据结构
  */
-const VERSION = 'v1.3.1';
+const VERSION = 'v1.4.0';
 const CACHE = 'qingzhang-' + VERSION;
 
 /**
@@ -287,6 +287,30 @@ self.addEventListener('fetch', (ev) => {
   // 所以改代码后记得升 VERSION（tools/check-sw-assets.mjs 会提醒清单，版本号靠自觉）。
   ev.respondWith((async () => {
     const cache = await caches.open(CACHE);
+
+    // 网址里带 r=... 的请求 → 强制走网络并刷新缓存。
+    //
+    // 用途：用户点了「重新加载」，目的是把可能坏掉的本地缓存刷掉。
+    // 如果这里还走「缓存优先」，就会把同一个坏文件再给一遍，重试等于没用。
+    //
+    // ⚠️ 注意：Service Worker **访问不到页面的 sessionStorage**，
+    // 所以不能靠「读页面标记」来判断，只能看请求网址本身带没带 r= 参数。
+    // 页面侧「把静态文件缓存整体刷新一遍」的逻辑在
+    // src/ui/app.js 的 refreshAssetsFromNetwork()，它会给每个请求都带上这个参数。
+    if (url.searchParams.has('r')) {
+      try {
+        const fresh = await fetch(new Request(req.url, { cache: 'reload' }));
+        if (fresh && fresh.ok && fresh.type === 'basic') {
+          cache.put(new Request(url.origin + url.pathname), fresh.clone());
+        }
+        return fresh;
+      } catch (e) {
+        // 网络不行就退回缓存，总比什么都没有强
+        const fallback = await cache.match(new Request(url.origin + url.pathname));
+        if (fallback) return fallback;
+      }
+    }
+
     const cached = await cache.match(req, { ignoreSearch: false });
 
     // 后台更新，不阻塞返回
