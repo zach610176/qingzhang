@@ -25,6 +25,76 @@ import { openSheet, toastOk, toastErr, toastWarn, pickMonth, esc, fmtMoney, fmtD
 import { CATEGORIES, INCOME_CATEGORIES } from '../core/model.js';
 
 /* ------------------------------------------------------------------ *
+ * 自救：把本地缓存整体刷新一遍
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把 Service Worker 缓存里的所有文件用网络重取一遍。
+ *
+ * 什么时候需要它：用户点了「重新加载」（看门狗给的按钮），
+ * 但静态资源平时是「缓存优先」—— 如果缓存里存了**坏文件**，
+ * 光刷新页面只会拿到同一个坏文件，重试等于没用。
+ *
+ * 原理：给每个请求都带上 `?r=<时间戳>`。
+ * Service Worker 看到网址里有 r= 参数就走网络（见 sw.js），
+ * 并且把新拿到的内容重新写进缓存。全部刷完再刷新页面。
+ *
+ * 这个函数**不抛错**：任何一个文件失败都不能挡住后面 ——
+ * 它本来就是给「已经出问题」的场景用的。
+ */
+async function refreshAssetsFromNetwork(onProgress) {
+  const stamp = Date.now();
+  const urls = await readSwAssetList();
+  let done = 0;
+  let ok = 0;
+  const CONCURRENCY = 4;
+
+  for (let i = 0; i < urls.length; i += CONCURRENCY) {
+    const batch = urls.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (u) => {
+      try {
+        const res = await fetch(u + '?r=' + stamp, { cache: 'reload' });
+        if (res && res.ok) ok++;
+      } catch (e) { /* 单个失败不影响整体 */ }
+      done++;
+      if (onProgress) onProgress(done, urls.length, ok);
+    }));
+  }
+  return { done, ok, total: urls.length };
+}
+
+/**
+ * 读出 sw.js 里的缓存清单。
+ *
+ * ⚠️ 一开始我在这里**手工抄了一份**文件清单（const SW_ASSETS = [...]）。
+ * 那是错的：清单在 sw.js 里，每次加/删模块都要改两处，
+ * 而漏改不会有任何报错 —— 只会让「重新加载」少刷一两个文件，
+ * 于是坏文件还在、按钮看起来没用。手工镜像两份清单迟早走偏。
+ *
+ * 所以改成运行时去读 sw.js 里的那一份（唯一来源）。
+ * 代价是多一次请求，但这段代码本来就是给「网络可能有问题」的场景用的，
+ * 请求失败时下面会退回用「当前页面已经加载过的模块」，
+ * 至少能把主入口刷掉，不会什么都不做。
+ */
+async function readSwAssetList() {
+  try {
+    // 带 ?r= 是为了绕开缓存，确保读到的是最新的 sw.js 本身
+    const res = await fetch('./sw.js?r=' + Date.now(), { cache: 'reload' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const m = text.match(/const\s+ASSETS\s*=\s*\[([\s\S]*?)\];/);
+    if (!m) throw new Error('sw.js 里找不到 ASSETS');
+    const urls = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])
+      .filter((u) => u.startsWith('./'));
+    if (!urls.length) throw new Error('ASSETS 解析出来是空的');
+    return urls;
+  } catch (e) {
+    console.warn('[轻账] 读不到 sw.js 的缓存清单，退回只刷主入口：', e && e.message);
+    return ['./index.html', './styles.css', './src/ui/app.js'];
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * 启动
  * ------------------------------------------------------------------ */
 
@@ -37,6 +107,24 @@ export async function boot() {
     const raw = localStorage.getItem('qz-theme');
     if (raw === 'dark' || raw === 'light') document.documentElement.dataset.theme = raw;
   } catch (e) { /* 隐私模式下 localStorage 可能不可用 */ }
+
+  // 用户之前点过「重新加载」→ 先把坏缓存整体刷一遍，再继续启动。
+  // 这一步放在最前面：如果缓存里有坏文件，后面加载模块时就会用到它们。
+  try {
+    if (sessionStorage.getItem('qz-force-network') === '1') {
+      sessionStorage.removeItem('qz-force-network');
+      if (bootEl) {
+        bootEl.hidden = false;
+        bootEl.innerHTML = '<div class="boot-logo">轻账</div>'
+          + '<div class="boot-sub">正在重新获取文件…</div>'
+          + '<div class="boot-bar"><i></i></div>';
+      }
+      const r = await refreshAssetsFromNetwork();
+      console.log(`[轻账] 强制刷新完成：${r.ok}/${r.total} 个文件`);
+    }
+  } catch (e) {
+    console.warn('[轻账] 强制刷新失败，继续启动：', e && e.message);
+  }
 
   initFilePicker();
   initBackupPicker();
